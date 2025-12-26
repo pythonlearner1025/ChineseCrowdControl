@@ -1,0 +1,46 @@
+{
+  "name": "beginning",
+  "version": "1.0.0",
+  "private": true,
+  "description": "",
+  "scripts": {},
+  "mainScene": "assets/main.scene.glb",
+  "main": "./main.js",
+  "keywords": [
+    "3d",
+    "game",
+    "threepipe",
+    "three-editor"
+  ],
+  "dependencies": {
+    "threepipe": ">=0.4.2"
+  },
+  "kite": {
+    "plugins": [],
+    "scripts": [
+      {
+        "import": "./assets/PlayerController.script.js"
+      },
+      {
+        "import": "./assets/CameraFollow.script.js"
+      },
+      {
+        "import": "./assets/GoliathController.script.js"
+      },
+      {
+        "import": "./assets/SoldierController.script.js"
+      },
+      {
+        "import": "./assets/SoldierSelectionManager.script.js"
+      },
+      {
+        "import": "./assets/BaseEnemyController.script.js"
+      },
+      {
+        "import": "./assets/CrowdController.script.js"
+      }
+    ],
+    "viewer": {},
+    "imports": {}
+  }
+}
