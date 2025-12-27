@@ -7,17 +7,37 @@ import {getPhysicsWorldManager} from './PhysicsWorldController.script.js'
  * RagdollComponent - Creates and manages physics-based ragdoll on death
  */
 export class RagdollComponent extends Object3DComponent {
-    static StateProperties = ['enabled']
+    static StateProperties = ['enabled', 'dismembermentEnabled']
     static ComponentType = 'RagdollComponent'
 
     enabled = true
+    dismembermentEnabled = true
+
+    // Dismemberment thresholds (force required to break joint)
+    // Weaker joints = lower threshold
+    _jointStrengths = {
+        // Weak joints (easy to break)
+        'neck': 150,           // Head detaches easily
+        'elbowLeft': 200,      // Elbows are weak
+        'elbowRight': 200,
+        'kneeLeft': 200,       // Knees are weak
+        'kneeRight': 200,
+
+        // Strong joints (hard to break)
+        'shoulderLeft': 400,   // Shoulders need more force
+        'shoulderRight': 400,
+        'hipLeft': 400,        // Hips need more force
+        'hipRight': 400
+    }
 
     // Internal state
     _bodies = []
     _meshes = []
     _constraints = []
+    _constraintMetadata = []  // Store joint info for each constraint
     _isActive = false
     _spawnTime = 0
+    _bloodParticles = []
 
     start() {
         if (super.start) super.start()
@@ -318,6 +338,7 @@ export class RagdollComponent extends Object3DComponent {
         const joints = [
             // Neck (head to torso)
             {
+                name: 'neck',
                 type: 'ConeTwist',
                 bodyA: 'torso',
                 bodyB: 'head',
@@ -327,6 +348,7 @@ export class RagdollComponent extends Object3DComponent {
             },
             // Left shoulder
             {
+                name: 'shoulderLeft',
                 type: 'ConeTwist',
                 bodyA: 'torso',
                 bodyB: 'upperArmLeft',
@@ -336,6 +358,7 @@ export class RagdollComponent extends Object3DComponent {
             },
             // Left elbow
             {
+                name: 'elbowLeft',
                 type: 'PointToPoint',
                 bodyA: 'upperArmLeft',
                 bodyB: 'lowerArmLeft',
@@ -344,6 +367,7 @@ export class RagdollComponent extends Object3DComponent {
             },
             // Right shoulder
             {
+                name: 'shoulderRight',
                 type: 'ConeTwist',
                 bodyA: 'torso',
                 bodyB: 'upperArmRight',
@@ -353,6 +377,7 @@ export class RagdollComponent extends Object3DComponent {
             },
             // Right elbow
             {
+                name: 'elbowRight',
                 type: 'PointToPoint',
                 bodyA: 'upperArmRight',
                 bodyB: 'lowerArmRight',
@@ -361,6 +386,7 @@ export class RagdollComponent extends Object3DComponent {
             },
             // Left hip
             {
+                name: 'hipLeft',
                 type: 'ConeTwist',
                 bodyA: 'torso',
                 bodyB: 'upperLegLeft',
@@ -370,6 +396,7 @@ export class RagdollComponent extends Object3DComponent {
             },
             // Left knee
             {
+                name: 'kneeLeft',
                 type: 'PointToPoint',
                 bodyA: 'upperLegLeft',
                 bodyB: 'lowerLegLeft',
@@ -378,6 +405,7 @@ export class RagdollComponent extends Object3DComponent {
             },
             // Right hip
             {
+                name: 'hipRight',
                 type: 'ConeTwist',
                 bodyA: 'torso',
                 bodyB: 'upperLegRight',
@@ -387,6 +415,7 @@ export class RagdollComponent extends Object3DComponent {
             },
             // Right knee
             {
+                name: 'kneeRight',
                 type: 'PointToPoint',
                 bodyA: 'upperLegRight',
                 bodyB: 'lowerLegRight',
@@ -420,6 +449,17 @@ export class RagdollComponent extends Object3DComponent {
             if (constraint) {
                 world.addConstraint(constraint)
                 this._constraints.push(constraint)
+
+                // Store metadata for dismemberment tracking
+                this._constraintMetadata.push({
+                    constraint: constraint,
+                    name: joint.name,
+                    bodyA: bodyA,
+                    bodyB: bodyB,
+                    pivotA: joint.pivotA,
+                    pivotB: joint.pivotB,
+                    broken: false
+                })
             }
         }
 
@@ -446,8 +486,164 @@ export class RagdollComponent extends Object3DComponent {
         )
     }
 
+    _checkDismemberment() {
+        const physicsManager = getPhysicsWorldManager()
+        if (!physicsManager || !physicsManager.world) return
+
+        // Check each constraint for excessive force
+        for (const meta of this._constraintMetadata) {
+            if (meta.broken) continue // Already dismembered
+
+            const constraint = meta.constraint
+            const jointName = meta.name
+            const threshold = this._jointStrengths[jointName] || 300
+
+            // Calculate force magnitude at the joint
+            // For PointToPoint constraints, check the impulse magnitude
+            // For ConeTwist constraints, check angular violation force
+            let forceMagnitude = 0
+
+            if (constraint instanceof CANNON.PointToPointConstraint) {
+                // Get relative velocity at constraint point
+                const bodyA = meta.bodyA
+                const bodyB = meta.bodyB
+
+                const va = bodyA.velocity.vadd(bodyA.angularVelocity.cross(meta.pivotA))
+                const vb = bodyB.velocity.vadd(bodyB.angularVelocity.cross(meta.pivotB))
+                const relVel = va.vsub(vb)
+                forceMagnitude = relVel.length() * (bodyA.mass + bodyB.mass)
+            } else if (constraint instanceof CANNON.ConeTwistConstraint) {
+                // For cone twist, use angular velocity difference
+                const bodyA = meta.bodyA
+                const bodyB = meta.bodyB
+                const angVelDiff = bodyA.angularVelocity.vsub(bodyB.angularVelocity)
+                forceMagnitude = angVelDiff.length() * (bodyA.mass + bodyB.mass) * 50
+            }
+
+            // Break joint if force exceeds threshold
+            if (forceMagnitude > threshold) {
+                console.log(`[RagdollComponent] Dismembering ${jointName}! Force: ${forceMagnitude.toFixed(0)} > ${threshold}`)
+                this._dismemberJoint(meta, physicsManager.world)
+            }
+        }
+    }
+
+    _dismemberJoint(meta, world) {
+        // Mark as broken
+        meta.broken = true
+
+        // Remove constraint from physics world
+        world.removeConstraint(meta.constraint)
+
+        // Remove from constraints array
+        const index = this._constraints.indexOf(meta.constraint)
+        if (index !== -1) {
+            this._constraints.splice(index, 1)
+        }
+
+        // Get joint world position for blood spawn
+        const bodyA = meta.bodyA
+        const pivotWorld = bodyA.pointToWorldFrame(meta.pivotA)
+        const bloodPos = new THREE.Vector3(pivotWorld.x, pivotWorld.y, pivotWorld.z)
+
+        // Spawn blood particles
+        this._spawnBloodSpray(bloodPos)
+
+        // Add impulse to separated body for dramatic effect
+        const bodyB = meta.bodyB
+        const separationImpulse = bodyA.velocity.vsub(bodyB.velocity).scale(0.5)
+        bodyB.applyImpulse(separationImpulse, meta.pivotB)
+    }
+
+    _spawnBloodSpray(position) {
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) return
+
+        // Create 20-30 blood particles
+        const particleCount = 20 + Math.floor(Math.random() * 10)
+
+        for (let i = 0; i < particleCount; i++) {
+            const geometry = new THREE.SphereGeometry(0.05 + Math.random() * 0.05, 4, 4)
+            const material = new THREE.MeshBasicMaterial({
+                color: new THREE.Color(0.6 + Math.random() * 0.2, 0, 0), // Dark to bright red
+                transparent: true,
+                opacity: 0.8
+            })
+            const particle = new THREE.Mesh(geometry, material)
+
+            // Random position offset
+            particle.position.copy(position)
+            particle.position.x += (Math.random() - 0.5) * 0.3
+            particle.position.y += (Math.random() - 0.5) * 0.3
+            particle.position.z += (Math.random() - 0.5) * 0.3
+
+            // Random velocity
+            const velocity = new THREE.Vector3(
+                (Math.random() - 0.5) * 5,
+                Math.random() * 3,
+                (Math.random() - 0.5) * 5
+            )
+
+            scene.add(particle)
+
+            // Store particle data
+            this._bloodParticles.push({
+                mesh: particle,
+                velocity: velocity,
+                lifetime: 2000 + Math.random() * 1000, // 2-3 seconds
+                spawnTime: Date.now()
+            })
+        }
+    }
+
+    _updateBloodParticles(deltaTime) {
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) return
+
+        const dt = deltaTime / 1000
+        const now = Date.now()
+
+        // Update each particle
+        for (let i = this._bloodParticles.length - 1; i >= 0; i--) {
+            const particle = this._bloodParticles[i]
+            const age = now - particle.spawnTime
+
+            // Remove if lifetime exceeded
+            if (age > particle.lifetime) {
+                scene.remove(particle.mesh)
+                particle.mesh.geometry.dispose()
+                particle.mesh.material.dispose()
+                this._bloodParticles.splice(i, 1)
+                continue
+            }
+
+            // Apply physics
+            particle.velocity.y -= 9.8 * dt // Gravity
+            particle.mesh.position.x += particle.velocity.x * dt
+            particle.mesh.position.y += particle.velocity.y * dt
+            particle.mesh.position.z += particle.velocity.z * dt
+
+            // Fade out over time
+            const fadeProgress = age / particle.lifetime
+            particle.mesh.material.opacity = 0.8 * (1 - fadeProgress)
+
+            // Stop at ground
+            if (particle.mesh.position.y < 0.1) {
+                particle.mesh.position.y = 0.1
+                particle.velocity.y = 0
+                particle.velocity.x *= 0.8
+                particle.velocity.z *= 0.8
+            }
+        }
+    }
+
     update({time, deltaTime}) {
         if (!this._isActive) return false
+
+        // Check for dismemberment if enabled
+        if (this.dismembermentEnabled) {
+            this._checkDismemberment()
+        }
 
         // Sync three.js meshes with cannon.js bodies
         for (let i = 0; i < this._bodies.length; i++) {
@@ -459,6 +655,9 @@ export class RagdollComponent extends Object3DComponent {
                 mesh.quaternion.copy(body.quaternion)
             }
         }
+
+        // Update blood particles
+        this._updateBloodParticles(deltaTime)
 
         return true // Keep updating
     }
@@ -489,11 +688,20 @@ export class RagdollComponent extends Object3DComponent {
                 mesh.geometry?.dispose()
                 mesh.material?.dispose()
             }
+
+            // Remove blood particles
+            for (const particle of this._bloodParticles) {
+                scene.remove(particle.mesh)
+                particle.mesh.geometry?.dispose()
+                particle.mesh.material?.dispose()
+            }
         }
 
         this._bodies = []
         this._meshes = []
         this._constraints = []
+        this._constraintMetadata = []
+        this._bloodParticles = []
         this._isActive = false
     }
 }

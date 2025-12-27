@@ -1,5 +1,6 @@
 import {Object3DComponent, EntityComponentPlugin} from 'threepipe'
 import * as THREE from 'three'
+import {getPhysicsWorldManager} from './PhysicsWorldController.script.js'
 
 /**
  * SoldierController - Individual soldier with selection and movement commands
@@ -312,9 +313,14 @@ export class SoldierController extends Object3DComponent {
             this._velocity.z *= scale
         }
 
-        // Apply velocity to position
-        this.object.position.x += this._velocity.x * dt * 8
-        this.object.position.z += this._velocity.z * dt * 8
+        // Calculate new position
+        const newX = this.object.position.x + this._velocity.x * dt * 8
+        const newZ = this.object.position.z + this._velocity.z * dt * 8
+
+        // Check collision with ragdoll bodies
+        const adjustedPos = this._checkRagdollCollision(newX, newZ)
+        this.object.position.x = adjustedPos.x
+        this.object.position.z = adjustedPos.z
 
         // Face movement direction (smooth rotation)
         if (currentSpeed > 0.1) {
@@ -330,6 +336,67 @@ export class SoldierController extends Object3DComponent {
             this._velocity.x = 0
             this._velocity.z = 0
         }
+    }
+
+    _checkRagdollCollision(newX, newZ) {
+        // Get physics world manager to access ragdolls
+        const physicsManager = getPhysicsWorldManager()
+        if (!physicsManager || !physicsManager.ragdolls) {
+            return {x: newX, z: newZ}
+        }
+
+        const soldierRadius = 0.5 // Collision radius for soldier
+        const soldierPos = {x: newX, y: this.object.position.y, z: newZ}
+        let finalX = newX
+        let finalZ = newZ
+
+        // Check collision with all ragdoll bodies
+        for (const ragdoll of physicsManager.ragdolls) {
+            if (!ragdoll._bodies || !ragdoll._isActive) continue
+
+            for (const body of ragdoll._bodies) {
+                const bodyPos = body.position
+                const dx = soldierPos.x - bodyPos.x
+                const dz = soldierPos.z - bodyPos.z
+                const dy = soldierPos.y - bodyPos.y
+                const distXZ = Math.sqrt(dx * dx + dz * dz)
+
+                // Only check horizontal collision (ignore vertical distance for now)
+                // Get body radius (approximate from shape)
+                let bodyRadius = 0.3 // Default radius
+                if (body.shapes[0]) {
+                    const shape = body.shapes[0]
+                    if (shape.radius) {
+                        bodyRadius = shape.radius
+                    } else if (shape.halfExtents) {
+                        bodyRadius = Math.max(shape.halfExtents.x, shape.halfExtents.z)
+                    }
+                }
+
+                const minDist = soldierRadius + bodyRadius
+
+                // Collision detected - only if bodies are at similar heights
+                if (distXZ < minDist && Math.abs(dy) < 1.5) {
+                    // Push soldier away from ragdoll body
+                    if (distXZ > 0.01) { // Avoid division by zero
+                        const pushDistance = minDist - distXZ
+                        const pushX = (dx / distXZ) * pushDistance
+                        const pushZ = (dz / distXZ) * pushDistance
+
+                        finalX += pushX
+                        finalZ += pushZ
+
+                        // Also apply a small push to the ragdoll body for realism
+                        const pushForce = 30 // Small force
+                        body.velocity.x -= (dx / distXZ) * pushForce
+                        body.velocity.z -= (dz / distXZ) * pushForce
+                        body.wakeUp() // Wake up the body if it was sleeping
+                    }
+                }
+            }
+        }
+
+        return {x: finalX, z: finalZ}
     }
 
     getCurrentSpeed() {

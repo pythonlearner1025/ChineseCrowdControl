@@ -404,18 +404,23 @@ export class HumanoidAnimationComponent extends Object3DComponent {
         const scene = this.ctx?.viewer?.scene
         if (!scene) return
 
-        // Remove all body part meshes
+        // Dispose all body part meshes (they're children of _rootObject)
         for (const part of Object.values(this._bodyParts)) {
             if (part.mesh) {
-                scene.remove(part.mesh)
+                // Remove from parent (rootObject) first
+                if (part.mesh.parent) {
+                    part.mesh.parent.remove(part.mesh)
+                }
                 part.mesh.geometry?.dispose()
                 part.mesh.material?.dispose()
             }
         }
 
-        // Remove root object
+        // Remove root object from scene (cascade removes any remaining children)
         if (this._rootObject) {
             scene.remove(this._rootObject)
+            // Dispose root object
+            this._rootObject.clear() // Remove all children
         }
 
         this._bodyParts = {}

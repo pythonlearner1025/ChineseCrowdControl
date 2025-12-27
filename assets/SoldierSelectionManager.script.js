@@ -121,19 +121,70 @@ export class SoldierSelectionManager extends Object3DComponent {
     }
 
     _getSoldierAtMouse(event) {
+        console.log('[SoldierSelectionManager] _getSoldierAtMouse called')
+
         const viewer = this.ctx?.viewer
-        if (!viewer) return null
+        if (!viewer) {
+            console.log('[SoldierSelectionManager] No viewer found')
+            return null
+        }
 
         const camera = viewer.scene.mainCamera
-        if (!camera) return null
+        const scene = viewer.scene
+        if (!camera || !scene) {
+            console.log('[SoldierSelectionManager] No camera or scene')
+            return null
+        }
 
         const rect = viewer.container.getBoundingClientRect()
         this._mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
         this._mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
+        console.log('[SoldierSelectionManager] Mouse coords:', this._mouse.x, this._mouse.y)
 
         this._raycaster.setFromCamera(this._mouse, camera)
 
-        // Check each soldier
+        console.log('[SoldierSelectionManager] Total soldiers registered:', this._soldiers.length)
+        console.log('[SoldierSelectionManager] Alive soldiers:', this._soldiers.filter(s => s.isAlive).length)
+
+        // First, try raycasting against all meshes in scene to find animation body parts
+        const intersects = this._raycaster.intersectObjects(scene.children, true)
+        console.log('[SoldierSelectionManager] Raycast intersections:', intersects.length)
+
+        for (let i = 0; i < Math.min(5, intersects.length); i++) {
+            const intersect = intersects[i]
+            console.log('[SoldierSelectionManager] Intersect', i, ':', intersect.object.name, intersect.object.type)
+
+            // Check if this mesh belongs to a HumanoidAnimationComponent's root
+            let currentObj = intersect.object
+            let depth = 0
+            while (currentObj && depth < 10) {
+                console.log('[SoldierSelectionManager]   Parent chain:', currentObj.name, currentObj.type)
+
+                // Check if this is a humanoid root
+                if (currentObj.name === 'HumanoidRoot') {
+                    console.log('[SoldierSelectionManager] Found HumanoidRoot at position:', currentObj.position)
+
+                    // Find the soldier that owns this animation
+                    for (const soldier of this._soldiers) {
+                        if (!soldier.isAlive || !soldier.object) continue
+
+                        // Check if this soldier is close to the clicked humanoid
+                        const dist = soldier.object.position.distanceTo(currentObj.position)
+                        console.log('[SoldierSelectionManager]   Checking soldier, distance:', dist)
+                        if (dist < 2) { // Match radius
+                            console.log('[SoldierSelectionManager] ✓ Found soldier via humanoid body click')
+                            return soldier
+                        }
+                    }
+                }
+                currentObj = currentObj.parent
+                depth++
+            }
+        }
+
+        console.log('[SoldierSelectionManager] Humanoid raycast failed, trying position-based detection')
+
+        // Fallback: Check distance from ray to soldier position (original method)
         for (const soldier of this._soldiers) {
             if (!soldier.isAlive || !soldier.object) continue
 
@@ -143,27 +194,42 @@ export class SoldierSelectionManager extends Object3DComponent {
             // Simple distance from ray to soldier position
             const v = new THREE.Vector3().subVectors(soldierPos, ray.origin)
             const projection = v.dot(ray.direction)
+            if (projection < 0) {
+                console.log('[SoldierSelectionManager]   Soldier behind camera, skipping')
+                continue // Behind camera
+            }
+
             const closestPoint = ray.origin.clone().add(ray.direction.clone().multiplyScalar(projection))
             const dist = closestPoint.distanceTo(soldierPos)
+            console.log('[SoldierSelectionManager]   Soldier distance from ray:', dist)
 
             if (dist < 1.5) { // click radius
+                console.log('[SoldierSelectionManager] ✓ Found soldier via position proximity')
                 return soldier
             }
         }
 
+        console.log('[SoldierSelectionManager] ✗ No soldier found')
         return null
     }
 
     // ==================== SELECTION ====================
 
     selectSoldier(soldier, addToSelection = false) {
+        console.log('[SoldierSelectionManager] selectSoldier called, addToSelection:', addToSelection)
+
         if (!addToSelection) {
+            console.log('[SoldierSelectionManager] Clearing previous selection')
             this.clearSelection()
         }
 
         if (soldier.isAlive) {
+            console.log('[SoldierSelectionManager] Selecting soldier (calling soldier.select())')
             soldier.select()
             this._selectedSoldiers.add(soldier)
+            console.log('[SoldierSelectionManager] Selected soldiers count:', this._selectedSoldiers.size)
+        } else {
+            console.log('[SoldierSelectionManager] Soldier is not alive, cannot select')
         }
     }
 
@@ -304,19 +370,30 @@ export class SoldierSelectionManager extends Object3DComponent {
     }
 
     _handleMouseDown(event) {
+        console.log('[SoldierSelectionManager] Mouse down event:', event.button)
+
         // Only handle left click
-        if (event.button !== 0) return
+        if (event.button !== 0) {
+            console.log('[SoldierSelectionManager] Not left click, ignoring')
+            return
+        }
 
         const isModifierClick = event.metaKey || event.ctrlKey
+        console.log('[SoldierSelectionManager] Modifier click:', isModifierClick)
 
         // Check if clicking on a soldier FIRST (before checking modifiers)
+        console.log('[SoldierSelectionManager] Checking for soldier at mouse...')
         const clickedSoldier = this._getSoldierAtMouse(event)
+        console.log('[SoldierSelectionManager] Clicked soldier:', clickedSoldier ? 'FOUND' : 'NOT FOUND')
 
         // Cmd/Ctrl + Click on soldier - Add/remove from selection
         if (isModifierClick && clickedSoldier) {
+            console.log('[SoldierSelectionManager] Modifier+click on soldier')
             if (this._selectedSoldiers.has(clickedSoldier)) {
+                console.log('[SoldierSelectionManager] Deselecting soldier')
                 this.deselectSoldier(clickedSoldier)
             } else {
+                console.log('[SoldierSelectionManager] Adding soldier to selection')
                 this.selectSoldier(clickedSoldier, true) // add to selection
             }
             return
@@ -324,21 +401,24 @@ export class SoldierSelectionManager extends Object3DComponent {
 
         // Simple click on soldier - Select it (clear previous selection)
         if (clickedSoldier) {
-            console.log('[SoldierSelectionManager] Soldier clicked - selecting:', clickedSoldier)
+            console.log('[SoldierSelectionManager] Simple click on soldier - selecting')
             this.selectSoldier(clickedSoldier, false) // Replace selection
             return
         }
 
         // Clicking on ground - Move selected soldiers
         if (this._selectedSoldiers.size > 0) {
+            console.log('[SoldierSelectionManager] Clicking ground with', this._selectedSoldiers.size, 'soldiers selected')
             this._isDragging = true
             const worldPos = this._getMouseWorldPosition(event)
             if (worldPos) {
-                console.log('[SoldierSelectionManager] Moving', this._selectedSoldiers.size, 'soldiers to', worldPos)
+                console.log('[SoldierSelectionManager] Moving soldiers to', worldPos)
                 this.moveSelectedTo(worldPos)
+            } else {
+                console.log('[SoldierSelectionManager] Could not get world position')
             }
         } else {
-            // No soldiers selected and clicking empty ground - just clear selection
+            console.log('[SoldierSelectionManager] Clicking empty ground, clearing selection')
             this.clearSelection()
         }
     }
