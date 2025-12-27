@@ -309,33 +309,37 @@ export class SoldierSelectionManager extends Object3DComponent {
 
         const isModifierClick = event.metaKey || event.ctrlKey
 
-        // Cmd/Ctrl + Click - Add soldier to selection
-        if (isModifierClick) {
-            const soldier = this._getSoldierAtMouse(event)
-            if (soldier) {
-                if (this._selectedSoldiers.has(soldier)) {
-                    this.deselectSoldier(soldier)
-                } else {
-                    this.selectSoldier(soldier, true) // add to selection
-                }
+        // Check if clicking on a soldier FIRST (before checking modifiers)
+        const clickedSoldier = this._getSoldierAtMouse(event)
+
+        // Cmd/Ctrl + Click on soldier - Add/remove from selection
+        if (isModifierClick && clickedSoldier) {
+            if (this._selectedSoldiers.has(clickedSoldier)) {
+                this.deselectSoldier(clickedSoldier)
+            } else {
+                this.selectSoldier(clickedSoldier, true) // add to selection
             }
             return
         }
 
-        // Check if clicking on a soldier
-        const clickedSoldier = this._getSoldierAtMouse(event)
+        // Simple click on soldier - Select it (clear previous selection)
         if (clickedSoldier) {
-            this.selectSoldier(clickedSoldier, false)
+            console.log('[SoldierSelectionManager] Soldier clicked - selecting:', clickedSoldier)
+            this.selectSoldier(clickedSoldier, false) // Replace selection
             return
         }
 
-        // If soldiers are selected and clicking on ground, start dragging
+        // Clicking on ground - Move selected soldiers
         if (this._selectedSoldiers.size > 0) {
             this._isDragging = true
             const worldPos = this._getMouseWorldPosition(event)
             if (worldPos) {
+                console.log('[SoldierSelectionManager] Moving', this._selectedSoldiers.size, 'soldiers to', worldPos)
                 this.moveSelectedTo(worldPos)
             }
+        } else {
+            // No soldiers selected and clicking empty ground - just clear selection
+            this.clearSelection()
         }
     }
 
