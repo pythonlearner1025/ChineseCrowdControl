@@ -186,6 +186,10 @@ export class RagdollComponent extends Object3DComponent {
     spawnRagdoll(position, velocity, options = {}) {
         const { scale = 1.0, color = 0xff4444, enemyType = 'Generic', bodyStates = null } = options
 
+        // Ensure blood texture is initialized before spawning ragdoll
+        // This ensures the transparent texture is applied to the plane ASAP
+        this._initializeBloodTexture()
+
         this._spawnTime = Date.now()
         this._isActive = true
 
@@ -672,24 +676,39 @@ export class RagdollComponent extends Object3DComponent {
 
         // Get joint world position for blood spawn
         const bodyA = meta.bodyA
+        const bodyB = meta.bodyB
         const pivotWorld = bodyA.pointToWorldFrame(meta.pivotA)
         const bloodPos = new THREE.Vector3(pivotWorld.x, pivotWorld.y, pivotWorld.z)
 
-        // Spawn blood particles
-        this._spawnBloodSpray(bloodPos)
+        // Get velocities from both disconnected body parts
+        const velocityA = new THREE.Vector3(bodyA.velocity.x, bodyA.velocity.y, bodyA.velocity.z)
+        const velocityB = new THREE.Vector3(bodyB.velocity.x, bodyB.velocity.y, bodyB.velocity.z)
+
+        // Spawn blood particles with inherited momentum from both parts
+        this._spawnBloodSpray(bloodPos, velocityA, velocityB)
 
         // Add impulse to separated body for dramatic effect
-        const bodyB = meta.bodyB
         const separationImpulse = bodyA.velocity.vsub(bodyB.velocity).scale(0.5)
         bodyB.applyImpulse(separationImpulse, meta.pivotB)
     }
 
-    _spawnBloodSpray(position) {
+    _spawnBloodSpray(position, velocityA = null, velocityB = null) {
         const scene = this.ctx?.viewer?.scene
         if (!scene) return
 
-        // Create 20-30 blood particles
+        // Create 20-30 blood particles (more for bigger joints)
         const particleCount = 20 + Math.floor(Math.random() * 10)
+
+        // Calculate average momentum from both body parts
+        let baseMomentum = new THREE.Vector3(0, 0, 0)
+        if (velocityA && velocityB) {
+            // Use average of both velocities as base momentum
+            baseMomentum.addVectors(velocityA, velocityB).multiplyScalar(0.5)
+        } else if (velocityA) {
+            baseMomentum.copy(velocityA)
+        } else if (velocityB) {
+            baseMomentum.copy(velocityB)
+        }
 
         for (let i = 0; i < particleCount; i++) {
             const geometry = new THREE.SphereGeometry(0.05 + Math.random() * 0.05, 4, 4)
@@ -706,11 +725,11 @@ export class RagdollComponent extends Object3DComponent {
             particle.position.y += (Math.random() - 0.5) * 0.3
             particle.position.z += (Math.random() - 0.5) * 0.3
 
-            // Random velocity
+            // Inherit base momentum and add random spray direction
             const velocity = new THREE.Vector3(
-                (Math.random() - 0.5) * 5,
-                Math.random() * 3,
-                (Math.random() - 0.5) * 5
+                baseMomentum.x + (Math.random() - 0.5) * 5,
+                baseMomentum.y + Math.random() * 3,
+                baseMomentum.z + (Math.random() - 0.5) * 5
             )
 
             scene.add(particle)
