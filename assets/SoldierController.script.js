@@ -537,7 +537,8 @@ export class SoldierController extends Object3DComponent {
                 // Calculate impact damage
                 if (currentSpeed > 0.01) {
                     const impactDamage = this.damage + (currentSpeed * this.impactDamageScale)
-                    member.takeDamage(impactDamage)
+
+                    member.takeDamage(impactDamage, this)
                 }
 
                 // Set cooldown
@@ -624,15 +625,75 @@ export class SoldierController extends Object3DComponent {
         console.log(`[SoldierController] Took ${effectiveDamage} damage (${this.health}/${this.maxHealth} HP)`)
 
         if (this.health <= 0) {
-            this._die()
+            this._die(attacker)
         }
     }
 
-    _die() {
+    _die(attacker = null) {
         console.log('[SoldierController] Died!')
         this.deselect()
+
+        // Hide object first (ensure death happens)
         if (this.object) {
             this.object.visible = false
+        }
+
+        // Try to spawn ragdoll (non-blocking)
+        try {
+            const worldPos = new THREE.Vector3()
+            this.object.getWorldPosition(worldPos)
+
+            // Calculate impact velocity from attacker
+            let impactVelocity = new THREE.Vector3()
+            if (attacker && attacker.object) {
+                const attackerPos = new THREE.Vector3()
+                attacker.object.getWorldPosition(attackerPos)
+                impactVelocity.subVectors(worldPos, attackerPos).normalize()
+                impactVelocity.multiplyScalar(30) // Strong impact force
+                impactVelocity.y = 10 // Add upward component
+            } else if (this._velocity) {
+                impactVelocity = this._velocity.clone()
+            }
+
+            this._spawnRagdoll(worldPos, impactVelocity)
+        } catch (error) {
+            console.error('[SoldierController] Error spawning ragdoll:', error)
+        }
+    }
+
+    _spawnRagdoll(position, velocity) {
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) {
+            console.warn('[SoldierController] No scene found for ragdoll')
+            return
+        }
+
+        if (!this.ctx?.ecp) {
+            console.warn('[SoldierController] ECP not available for ragdoll')
+            return
+        }
+
+        // Create a temporary object for the ragdoll component
+        const ragdollObj = new THREE.Group()
+        ragdollObj.position.copy(position)
+        scene.add(ragdollObj)
+
+        // Add ragdoll component using ECP
+        this.ctx.ecp.addComponent(ragdollObj, 'RagdollComponent')
+
+        // Get the component
+        const ragdoll = EntityComponentPlugin.GetComponent(ragdollObj, 'RagdollComponent')
+
+        if (ragdoll) {
+            console.log('[SoldierController] Spawning soldier ragdoll at', position)
+            // Spawn ragdoll with blue color for soldiers
+            ragdoll.spawnRagdoll(position, velocity, {
+                scale: 1.0,
+                color: 0x4444ff, // Blue for soldiers
+                enemyType: 'Soldier'
+            })
+        } else {
+            console.warn('[SoldierController] Failed to get RagdollComponent')
         }
     }
 

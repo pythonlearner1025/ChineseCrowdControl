@@ -731,7 +731,7 @@ export class PlayerController extends Object3DComponent {
         this._lastDamageTime = Date.now()
 
         if (this.health <= 0) {
-            this._die()
+            this._die(attacker)
         }
     }
 
@@ -743,14 +743,84 @@ export class PlayerController extends Object3DComponent {
         const actualHeal = this.health - oldHealth
     }
 
-    _die() {
+    _die(attacker = null) {
         this._isAlive = false
         this.running = false
-        this.onDeath()
+        this.onDeath(attacker)
     }
 
-    onDeath() {
-        // Override or extend for death behavior
+    onDeath(attacker = null) {
+        // Hide player first (ensure death happens)
+        if (this.object) {
+            this.object.visible = false
+        }
+
+        // Try to spawn ragdoll (non-blocking)
+        try {
+            const worldPos = new THREE.Vector3()
+            this.object.getWorldPosition(worldPos)
+
+            // Calculate impact velocity from attacker
+            let impactVelocity = new THREE.Vector3()
+            if (attacker) {
+                // Try to get attacker position
+                let attackerPos = null
+                if (attacker.object) {
+                    attackerPos = new THREE.Vector3()
+                    attacker.object.getWorldPosition(attackerPos)
+                } else if (attacker.mesh) {
+                    attackerPos = attacker.mesh.position.clone()
+                }
+
+                if (attackerPos) {
+                    impactVelocity.subVectors(worldPos, attackerPos).normalize()
+                    impactVelocity.multiplyScalar(30) // Strong impact force
+                    impactVelocity.y = 10 // Add upward component
+                }
+            } else if (this._velocity) {
+                impactVelocity = this._velocity.clone()
+            }
+
+            this._spawnRagdoll(worldPos, impactVelocity)
+        } catch (error) {
+            console.error('[PlayerController] Error spawning ragdoll:', error)
+        }
+    }
+
+    _spawnRagdoll(position, velocity) {
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) {
+            console.warn('[PlayerController] No scene found for ragdoll')
+            return
+        }
+
+        if (!this.ctx?.ecp) {
+            console.warn('[PlayerController] ECP not available for ragdoll')
+            return
+        }
+
+        // Create a temporary object for the ragdoll component
+        const ragdollObj = new THREE.Group()
+        ragdollObj.position.copy(position)
+        scene.add(ragdollObj)
+
+        // Add ragdoll component using ECP
+        this.ctx.ecp.addComponent(ragdollObj, 'RagdollComponent')
+
+        // Get the component
+        const ragdoll = EntityComponentPlugin.GetComponent(ragdollObj, 'RagdollComponent')
+
+        if (ragdoll) {
+            console.log('[PlayerController] Spawning player ragdoll at', position)
+            // Spawn ragdoll with green color for player
+            ragdoll.spawnRagdoll(position, velocity, {
+                scale: 1.0,
+                color: 0x44ff44, // Green for player
+                enemyType: 'Player'
+            })
+        } else {
+            console.warn('[PlayerController] Failed to get RagdollComponent')
+        }
     }
 
     respawn() {
@@ -758,6 +828,11 @@ export class PlayerController extends Object3DComponent {
         this.health = this.maxHealth
         this.running = true
         this._lastDamageTime = 0
+
+        // Make player visible again
+        if (this.object) {
+            this.object.visible = true
+        }
     }
     
     ToggleRunning = () => {

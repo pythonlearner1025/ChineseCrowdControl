@@ -107,13 +107,46 @@ class CrowdMember {
         }
     }
     
-    takeDamage(amount) {
+    takeDamage(amount, attacker = null) {
         if (!this.isAlive) return
         this.health -= amount
         if (this.health <= 0) {
             this.health = 0
             this.isAlive = false
+
+            // Hide mesh first (ensure death happens)
             this.mesh.visible = false
+
+            // Try to spawn ragdoll (non-blocking)
+            try {
+                const controller = this.controller
+                if (controller) {
+                    const worldPos = new THREE.Vector3()
+                    this.mesh.getWorldPosition(worldPos)
+
+                    // Calculate impact velocity from soldier attacker
+                    let impactVelocity = new THREE.Vector3()
+
+                    if (attacker && attacker.object) {
+                        // Attacker is the soldier controller
+                        const attackerPos = new THREE.Vector3()
+                        attacker.object.getWorldPosition(attackerPos)
+
+                        // Calculate direction from attacker to victim
+                        impactVelocity.subVectors(worldPos, attackerPos).normalize()
+                        impactVelocity.multiplyScalar(30) // Impact force
+                        impactVelocity.y = 1 // Upward component
+
+                        console.log('[CrowdMember] Impact from soldier at', attackerPos, 'velocity:', impactVelocity)
+                    } else {
+                        console.error('[CrowdMember] No attacker or attacker.object found!', attacker)
+                    }
+
+                    controller._spawnCrowdMemberRagdoll(this, worldPos, impactVelocity)
+                }
+            } catch (error) {
+                console.error('[CrowdMember] Error spawning ragdoll:', error)
+            }
         }
     }
 }
@@ -272,6 +305,42 @@ export class CrowdController extends Object3DComponent {
 
         this._members.push(member)
         return member
+    }
+
+    _spawnCrowdMemberRagdoll(member, position, velocity) {
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) {
+            console.warn('[CrowdController] No scene found for ragdoll')
+            return
+        }
+
+        if (!this.ctx?.ecp) {
+            console.warn('[CrowdController] ECP not available for ragdoll')
+            return
+        }
+
+        // Create temporary object for ragdoll component
+        const ragdollObj = new THREE.Group()
+        ragdollObj.position.copy(position)
+        scene.add(ragdollObj)
+
+        // Add ragdoll component using ECP
+        this.ctx.ecp.addComponent(ragdollObj, 'RagdollComponent')
+
+        // Get the component
+        const ragdoll = EntityComponentPlugin.GetComponent(ragdollObj, 'RagdollComponent')
+
+        if (ragdoll) {
+            console.log('[CrowdController] Spawning crowd member ragdoll at', position)
+            // Spawn ragdoll with smaller scale for crowd members
+            ragdoll.spawnRagdoll(position, velocity, {
+                scale: 0.8, // Smaller for crowd
+                color: 0xff8844, // Orange for crowd
+                enemyType: 'CrowdMember'
+            })
+        } else {
+            console.warn('[CrowdController] Failed to get RagdollComponent')
+        }
     }
 
     // ==================== A* PATHFINDING ====================

@@ -13,6 +13,7 @@
     "three-editor"
   ],
   "dependencies": {
+    "cannon-es": "^0.20.0",
     "threepipe": ">=0.4.2"
   },
   "kite": {
@@ -38,6 +39,12 @@
       },
       {
         "import": "./assets/CrowdController.script.js"
+      },
+      {
+        "import": "./assets/PhysicsWorldController.script.js"
+      },
+      {
+        "import": "./assets/RagdollComponent.script.js"
       }
     ],
     "viewer": {},

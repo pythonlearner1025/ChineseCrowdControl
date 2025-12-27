@@ -329,19 +329,79 @@ export class BaseEnemyController extends Object3DComponent {
         this.health -= effectiveDamage
 
         if (this.health <= 0) {
-            this._die()
+            this._die(attacker)
         }
     }
 
-    _die() {
+    _die(attacker = null) {
         this._isAlive = false
-        this.onDeath()
+        this.onDeath(attacker)
     }
 
-    onDeath() {
-        // Override in subclass for death behavior (drops, animations, etc.)
+    onDeath(attacker = null) {
+        // Hide original mesh first (ensure death happens even if ragdoll fails)
         if (this.object) {
             this.object.visible = false
+        }
+
+        // Try to spawn ragdoll (non-blocking)
+        try {
+            const worldPos = new THREE.Vector3()
+            this.object.getWorldPosition(worldPos)
+
+            // Calculate impact velocity from attacker
+            let impactVelocity = new THREE.Vector3()
+            if (attacker && attacker.object) {
+                // Get direction from attacker to victim
+                const attackerPos = new THREE.Vector3()
+                attacker.object.getWorldPosition(attackerPos)
+                impactVelocity.subVectors(worldPos, attackerPos).normalize()
+                impactVelocity.multiplyScalar(30) // Strong impact force
+                impactVelocity.y = 10 // Add upward component
+            } else if (this._velocity) {
+                // Fallback to enemy's own velocity
+                impactVelocity = this._velocity.clone()
+            }
+
+            this._spawnRagdoll(worldPos, impactVelocity)
+        } catch (error) {
+            console.error('[BaseEnemyController] Error spawning ragdoll:', error)
+        }
+    }
+
+    _spawnRagdoll(position, velocity) {
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) {
+            console.warn('[BaseEnemyController] No scene found for ragdoll')
+            return
+        }
+
+        if (!this.ctx?.ecp) {
+            console.warn('[BaseEnemyController] ECP not available for ragdoll')
+            return
+        }
+
+        // Create a temporary object for the ragdoll component
+        const ragdollObj = new THREE.Group()
+        ragdollObj.position.copy(position)
+        scene.add(ragdollObj)
+
+        // Add ragdoll component using ECP
+        this.ctx.ecp.addComponent(ragdollObj, 'RagdollComponent')
+
+        // Get the component
+        const ragdoll = EntityComponentPlugin.GetComponent(ragdollObj, 'RagdollComponent')
+
+        if (ragdoll) {
+            console.log('[BaseEnemyController] Spawning ragdoll at', position)
+            // Spawn ragdoll with appropriate scale and color
+            ragdoll.spawnRagdoll(position, velocity, {
+                scale: 1.0,
+                color: 0xff4444, // Red for enemies
+                enemyType: this.name
+            })
+        } else {
+            console.warn('[BaseEnemyController] Failed to get RagdollComponent')
         }
     }
 
