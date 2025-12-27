@@ -26,7 +26,7 @@ class PhysicsWorldManager {
         this.ragdolls = [] // Track all active ragdolls
         this.groundsInitialized = false
 
-        console.log('[PhysicsWorldManager] Initialized with gravity:', this.world.gravity)
+        //console.log('[PhysicsWorldManager] Initialized with gravity:', this.world.gravity)
     }
 
     initializeGroundPlanes(scene) {
@@ -42,13 +42,13 @@ class PhysicsWorldManager {
         })
 
         if (groundObjects.length > 0) {
-            console.log(`[PhysicsWorldManager] Found ${groundObjects.length} ground objects`)
+            //console.log(`[PhysicsWorldManager] Found ${groundObjects.length} ground objects`)
             for (const ground of groundObjects) {
                 this.addGroundPlane(ground.position.y)
             }
         } else {
             // Fallback: create ground at y=0
-            console.log('[PhysicsWorldManager] No ground found, creating default at y=0')
+            //console.log('[PhysicsWorldManager] No ground found, creating default at y=0')
             this.addGroundPlane(0)
         }
 
@@ -66,7 +66,7 @@ class PhysicsWorldManager {
         groundBody.position.set(0, yPosition, 0)
 
         this.world.addBody(groundBody)
-        console.log(`[PhysicsWorldManager] Added ground plane at y=${yPosition}`)
+        //console.log(`[PhysicsWorldManager] Added ground plane at y=${yPosition}`)
     }
 
     step(deltaTime) {
@@ -117,12 +117,12 @@ export class PhysicsWorldController extends Object3DComponent {
             physicsWorldManager.initializeGroundPlanes(scene)
         }
 
-        console.log('[PhysicsWorldController] Started')
+        //console.log('[PhysicsWorldController] Started')
     }
 
     stop() {
         if (super.stop) super.stop()
-        console.log('[PhysicsWorldController] Stopped')
+        //console.log('[PhysicsWorldController] Stopped')
     }
 
     update({time, deltaTime}) {

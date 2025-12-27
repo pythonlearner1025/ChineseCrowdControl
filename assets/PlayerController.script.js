@@ -811,7 +811,7 @@ export class PlayerController extends Object3DComponent {
         const ragdoll = EntityComponentPlugin.GetComponent(ragdollObj, 'RagdollComponent')
 
         if (ragdoll) {
-            console.log('[PlayerController] Spawning player ragdoll at', position)
+            //console.log('[PlayerController] Spawning player ragdoll at', position)
             // Spawn ragdoll with green color for player
             ragdoll.spawnRagdoll(position, velocity, {
                 scale: 1.0,

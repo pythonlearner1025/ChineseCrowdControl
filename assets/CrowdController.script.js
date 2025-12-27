@@ -123,7 +123,7 @@ class CrowdMember {
 
             // Clean up animation component (CRITICAL - removes the 10 frozen body parts!)
             if (this.animationComponent) {
-                console.log('[CrowdMember] Cleaning up animation component')
+                //console.log('[CrowdMember] Cleaning up animation component')
                 this.animationComponent.cleanup()
                 this.animationComponent = null
             }
@@ -153,7 +153,7 @@ class CrowdMember {
                         impactVelocity.multiplyScalar(30) // Impact force
                         impactVelocity.y = 1 // Upward component
 
-                        console.log('[CrowdMember] Impact from soldier at', attackerPos, 'velocity:', impactVelocity)
+                        //console.log('[CrowdMember] Impact from soldier at', attackerPos, 'velocity:', impactVelocity)
                     } else {
                         console.error('[CrowdMember] No attacker or attacker.object found!', attacker)
                     }
@@ -178,10 +178,10 @@ export class CrowdController extends Object3DComponent {
     static ComponentType = 'CrowdController'
 
     enabled = true
-    crowdSize = 10
+    crowdSize = 20
     spawnRadius = 8
     memberHealth = 50
-    memberSpeed = 4
+    memberSpeed = 8
     memberDamage = 5
     separationRadius = 1.5
     separationStrength = 3.0
@@ -214,7 +214,7 @@ export class CrowdController extends Object3DComponent {
         this._spawnCrowd()
         this._initialized = true
         
-        console.log(`[CrowdController] Started with ${this._members.length} members, player: ${this._player ? this._player.name : 'NOT FOUND'}`)
+        //console.log(`[CrowdController] Started with ${this._members.length} members, player: ${this._player ? this._player.name : 'NOT FOUND'}`)
     }
 
     stop() {
@@ -331,7 +331,7 @@ export class CrowdController extends Object3DComponent {
             animComp.armSwingAngle = Math.PI / 9
             animComp.torsoBobbingHeight = 0.08
             member.animationComponent = animComp
-            console.log('[CrowdController] Added animation component to crowd member')
+            //console.log('[CrowdController] Added animation component to crowd member')
         }
 
         this._members.push(member)
@@ -362,14 +362,14 @@ export class CrowdController extends Object3DComponent {
         const ragdoll = EntityComponentPlugin.GetComponent(ragdollObj, 'RagdollComponent')
 
         if (ragdoll) {
-            console.log('[CrowdController] Spawning crowd member ragdoll at', position)
+            //console.log('[CrowdController] Spawning crowd member ragdoll at', position)
 
             // Capture body states from animation for seamless transition
             const bodyStates = member.animationComponent ?
                 member.animationComponent.getBodyStates() : null
 
             if (bodyStates) {
-                console.log('[CrowdController] Using animated body states for ragdoll')
+                //console.log('[CrowdController] Using animated body states for ragdoll')
             }
 
             // Spawn ragdoll with smaller scale for crowd members
@@ -732,7 +732,7 @@ export class CrowdController extends Object3DComponent {
         if (this._debugTimer > 3000) {
             this._debugTimer = 0
             const alive = this._members.filter(m => m.isAlive).length
-            console.log(`[CrowdController] alive=${alive}/${this._members.length}, player=${this._player ? this._player.name : 'null'}, soldiers=${this._soldiers.length}`)
+            //console.log(`[CrowdController] alive=${alive}/${this._members.length}, player=${this._player ? this._player.name : 'null'}, soldiers=${this._soldiers.length}`)
         }
 
         // Update each member

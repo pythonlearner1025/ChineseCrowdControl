@@ -44,7 +44,7 @@ export class HumanoidAnimationComponent extends Object3DComponent {
             this.object.visible = false
         }
 
-        console.log('[HumanoidAnimationComponent] Started with scale:', this.scale, 'color:', this.color.toString(16))
+        //console.log('[HumanoidAnimationComponent] Started with scale:', this.scale, 'color:', this.color.toString(16))
     }
 
     stop() {
@@ -220,7 +220,7 @@ export class HumanoidAnimationComponent extends Object3DComponent {
             }
         }
 
-        console.log(`[HumanoidAnimationComponent] Created ${Object.keys(this._bodyParts).length} body parts`)
+        //console.log(`[HumanoidAnimationComponent] Created ${Object.keys(this._bodyParts).length} body parts`)
     }
 
     _animateLimbs(phase, velocity) {
@@ -426,6 +426,6 @@ export class HumanoidAnimationComponent extends Object3DComponent {
         this._bodyParts = {}
         this._rootObject = null
 
-        console.log('[HumanoidAnimationComponent] Cleaned up')
+        //console.log('[HumanoidAnimationComponent] Cleaned up')
     }
 }

@@ -10,6 +10,16 @@ export class RagdollComponent extends Object3DComponent {
     static StateProperties = ['enabled', 'dismembermentEnabled']
     static ComponentType = 'RagdollComponent'
 
+    // Shared blood texture (class-level, shared across all ragdolls)
+    static _bloodCanvas = null
+    static _bloodContext = null
+    static _bloodTexture = null
+    static _groundPlane = null
+    static _planeWidth = 100  // Detected plane width (X axis)
+    static _planeHeight = 100  // Detected plane height (Z axis)
+    static _planeCenter = { x: 0, z: 0 }  // Plane center position
+    static _textureSize = 2048  // High-res texture
+
     enabled = true
     dismembermentEnabled = true
 
@@ -41,11 +51,130 @@ export class RagdollComponent extends Object3DComponent {
 
     start() {
         if (super.start) super.start()
+
+        // Initialize shared blood texture on first ragdoll spawn
+        this._initializeBloodTexture()
     }
 
     stop() {
         if (super.stop) super.stop()
         this.cleanup()
+    }
+
+    _initializeBloodTexture() {
+        // Only initialize once (class-level)
+        if (RagdollComponent._bloodCanvas) return
+
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) return
+
+        // Find the plane object in the scene
+        let plane = null
+        scene.traverse((obj) => {
+            if (obj.name === 'plane' || obj.name === 'Plane') {
+                plane = obj
+            }
+        })
+
+        if (!plane) {
+            console.warn('[RagdollComponent] No plane object found for blood texture')
+            return
+        }
+
+        RagdollComponent._groundPlane = plane
+
+        // Calculate actual plane size (geometry size * scale)
+        let planeWidth = 100  // Default fallback
+        let planeHeight = 100
+
+        if (plane.geometry) {
+            console.log('[BLOOD DEBUG] === PLANE GEOMETRY DETECTION ===')
+            console.log('[BLOOD DEBUG] geometry.userData:', plane.geometry.userData)
+            console.log('[BLOOD DEBUG] geometry.parameters:', plane.geometry.parameters)
+
+            // Method 1: Check userData.generationParams (custom plane from editor)
+            if (plane.geometry.userData?.generationParams) {
+                const params = plane.geometry.userData.generationParams
+                console.log('[BLOOD DEBUG] Using generationParams:', params)
+                planeWidth = params.width || params.size || 100
+                planeHeight = params.height || params.depth || params.size || 100
+                console.log('[BLOOD DEBUG] Extracted width:', planeWidth, 'height:', planeHeight)
+            }
+            // Method 2: Check standard parameters
+            else if (plane.geometry.parameters) {
+                planeWidth = plane.geometry.parameters.width || 100
+                planeHeight = plane.geometry.parameters.height || 100
+                console.log('[BLOOD DEBUG] Using parameters - width:', planeWidth, 'height:', planeHeight)
+            }
+            // Method 3: Use bounding box
+            else {
+                if (!plane.geometry.boundingBox) {
+                    plane.geometry.computeBoundingBox()
+                }
+                const bbox = plane.geometry.boundingBox
+                if (bbox) {
+                    console.log('[BLOOD DEBUG] Using bbox - min:', bbox.min, 'max:', bbox.max)
+                    // For a plane lying flat (XZ plane), use X and Z dimensions
+                    planeWidth = Math.abs(bbox.max.x - bbox.min.x)
+                    planeHeight = Math.abs(bbox.max.z - bbox.min.z)
+                    console.log('[BLOOD DEBUG] Calculated from bbox - width(X):', planeWidth, 'height(Z):', planeHeight)
+
+                    // If plane is upright (XY plane), use X and Y
+                    if (planeHeight < 0.01) {
+                        planeHeight = Math.abs(bbox.max.y - bbox.min.y)
+                        console.log('[BLOOD DEBUG] Plane is upright, using Y:', planeHeight)
+                    }
+                }
+            }
+        }
+
+        // Apply scale
+        console.log('[BLOOD DEBUG] Plane scale - x:', plane.scale.x, 'y:', plane.scale.y, 'z:', plane.scale.z)
+        console.log('[BLOOD DEBUG] Before scale - width:', planeWidth, 'height:', planeHeight)
+        planeWidth *= plane.scale.x
+        planeHeight *= plane.scale.z
+        console.log('[BLOOD DEBUG] After scale - width:', planeWidth, 'height:', planeHeight)
+
+        RagdollComponent._planeWidth = planeWidth   // Store actual width (X)
+        RagdollComponent._planeHeight = planeHeight  // Store actual height (Z)
+
+        // Get plane center position
+        const planeWorldPos = new THREE.Vector3()
+        plane.getWorldPosition(planeWorldPos)
+        RagdollComponent._planeCenter = { x: planeWorldPos.x, z: planeWorldPos.z }
+
+        console.log('[BLOOD DEBUG] === FINAL PLANE CONFIG ===')
+        console.log('[BLOOD DEBUG] Plane center: (', RagdollComponent._planeCenter.x.toFixed(2), ',', RagdollComponent._planeCenter.z.toFixed(2), ')')
+        console.log('[BLOOD DEBUG] Final plane dimensions:', planeWidth.toFixed(2), 'x', planeHeight.toFixed(2))
+        console.log('[BLOOD DEBUG] Texture size:', RagdollComponent._textureSize)
+        console.log('[BLOOD DEBUG] Coverage: X=[', (RagdollComponent._planeCenter.x - planeWidth/2).toFixed(1), 'to', (RagdollComponent._planeCenter.x + planeWidth/2).toFixed(1), ']')
+        console.log('[BLOOD DEBUG] Coverage: Z=[', (RagdollComponent._planeCenter.z - planeHeight/2).toFixed(1), 'to', (RagdollComponent._planeCenter.z + planeHeight/2).toFixed(1), ']')
+
+        // Create canvas for blood texture
+        const canvas = document.createElement('canvas')
+        canvas.width = RagdollComponent._textureSize
+        canvas.height = RagdollComponent._textureSize
+        const ctx = canvas.getContext('2d')
+
+        // Clear to transparent
+        ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+        RagdollComponent._bloodCanvas = canvas
+        RagdollComponent._bloodContext = ctx
+
+        // Create THREE.js texture from canvas
+        const texture = new THREE.CanvasTexture(canvas)
+        texture.needsUpdate = true
+        RagdollComponent._bloodTexture = texture
+
+        // Apply texture to plane material
+        if (plane.material) {
+            plane.material.map = texture
+            plane.material.transparent = true
+            plane.material.needsUpdate = true
+        }
+
+        //console.log('[RagdollComponent] Blood texture initialized on plane')
     }
 
     /**
@@ -83,7 +212,7 @@ export class RagdollComponent extends Object3DComponent {
         // Register with physics manager
         physicsManager.addRagdoll(this)
 
-        console.log(`[RagdollComponent] Spawned ${enemyType} ragdoll at`, position)
+        //console.log(`[RagdollComponent] Spawned ${enemyType} ragdoll at`, position)
     }
 
     _createRagdollBodies(rootPos, scale, color, world) {
@@ -325,7 +454,7 @@ export class RagdollComponent extends Object3DComponent {
             this._meshes.push(mesh)
         }
 
-        console.log(`[RagdollComponent] Created ragdoll from ${Object.keys(bodyStates).length} animated body states`)
+        //console.log(`[RagdollComponent] Created ragdoll from ${Object.keys(bodyStates).length} animated body states`)
     }
 
     _createRagdollConstraints(world) {
@@ -463,7 +592,7 @@ export class RagdollComponent extends Object3DComponent {
             }
         }
 
-        console.log(`[RagdollComponent] Created ${this._constraints.length} constraints`)
+        //console.log(`[RagdollComponent] Created ${this._constraints.length} constraints`)
     }
 
     _applyDeathForce(velocity) {
@@ -522,7 +651,7 @@ export class RagdollComponent extends Object3DComponent {
 
             // Break joint if force exceeds threshold
             if (forceMagnitude > threshold) {
-                console.log(`[RagdollComponent] Dismembering ${jointName}! Force: ${forceMagnitude.toFixed(0)} > ${threshold}`)
+                //console.log(`[RagdollComponent] Dismembering ${jointName}! Force: ${forceMagnitude.toFixed(0)} > ${threshold}`)
                 this._dismemberJoint(meta, physicsManager.world)
             }
         }
@@ -596,6 +725,88 @@ export class RagdollComponent extends Object3DComponent {
         }
     }
 
+    _createBloodStain(x, z) {
+        const ctx = RagdollComponent._bloodContext
+        const texture = RagdollComponent._bloodTexture
+        if (!ctx || !texture) {
+            console.log('[BLOOD DEBUG] No context or texture available!')
+            return
+        }
+
+        console.log('[BLOOD DEBUG] === BLOOD STAIN PROJECTION ===')
+        console.log('[BLOOD DEBUG] World position: (', x.toFixed(2), ',', z.toFixed(2), ')')
+
+        // Convert world coordinates to texture UV coordinates
+        // Account for plane center position and dimensions (width=X, height=Z)
+        const planeWidth = RagdollComponent._planeWidth
+        const planeHeight = RagdollComponent._planeHeight
+        const planeCenter = RagdollComponent._planeCenter
+        const halfWidth = planeWidth / 2
+        const halfHeight = planeHeight / 2
+
+        console.log('[BLOOD DEBUG] Using plane dimensions:', planeWidth.toFixed(2), 'x', planeHeight.toFixed(2))
+        console.log('[BLOOD DEBUG] Using planeCenter: (', planeCenter.x.toFixed(2), ',', planeCenter.z.toFixed(2), ')')
+
+        // Convert world position to local position relative to plane center
+        const localX = x - planeCenter.x
+        const localZ = z - planeCenter.z
+        console.log('[BLOOD DEBUG] Local position: (', localX.toFixed(2), ',', localZ.toFixed(2), ')')
+
+        // Convert to UV (0 to 1) - use separate dimensions for X and Z
+        const u = (localX + halfWidth) / planeWidth
+        const v = (localZ + halfHeight) / planeHeight
+        console.log('[BLOOD DEBUG] UV coordinates: u=', u.toFixed(3), 'v=', v.toFixed(3))
+
+        // Clamp to texture bounds (if blood is outside plane, skip)
+        if (u < 0 || u > 1 || v < 0 || v > 1) {
+            console.log('[BLOOD DEBUG] ❌ OUTSIDE BOUNDS - skipping stain')
+            console.log('[BLOOD DEBUG] u range: [0, 1], actual:', u.toFixed(3))
+            console.log('[BLOOD DEBUG] v range: [0, 1], actual:', v.toFixed(3))
+            return
+        }
+
+        // Convert UV to pixel coordinates
+        const texSize = RagdollComponent._textureSize
+        const px = u * texSize
+        const py = v * texSize  // Direct mapping (no flip)
+        console.log('[BLOOD DEBUG] Pixel coords: (', px.toFixed(0), ',', py.toFixed(0), ') in', texSize, 'x', texSize, 'texture')
+        console.log('[BLOOD DEBUG] Canvas Y axis test: v=', v.toFixed(3), '-> py=', py.toFixed(0))
+        console.log('[BLOOD DEBUG] ✓ Drawing blood stain')
+
+        // Draw blood splatter on canvas
+        const stainRadius = (5 + Math.random() * 10)  // 5-15 pixels radius
+        const splatterCount = 3 + Math.floor(Math.random() * 5)  // 3-7 splatters
+
+        // Main stain
+        const gradient = ctx.createRadialGradient(px, py, 0, px, py, stainRadius)
+        const red = Math.floor(60 + Math.random() * 40)  // 60-100
+        gradient.addColorStop(0, `rgba(${red}, 0, 0, ${0.8 + Math.random() * 0.2})`)
+        gradient.addColorStop(0.6, `rgba(${red}, 0, 0, ${0.4 + Math.random() * 0.2})`)
+        gradient.addColorStop(1, 'rgba(80, 0, 0, 0)')
+
+        ctx.fillStyle = gradient
+        ctx.beginPath()
+        ctx.arc(px, py, stainRadius, 0, Math.PI * 2)
+        ctx.fill()
+
+        // Random splatters around main stain
+        for (let i = 0; i < splatterCount; i++) {
+            const angle = Math.random() * Math.PI * 2
+            const distance = stainRadius + Math.random() * stainRadius
+            const splatterX = px + Math.cos(angle) * distance
+            const splatterY = py + Math.sin(angle) * distance
+            const splatterSize = 2 + Math.random() * 4
+
+            ctx.fillStyle = `rgba(${red}, 0, 0, ${0.3 + Math.random() * 0.3})`
+            ctx.beginPath()
+            ctx.arc(splatterX, splatterY, splatterSize, 0, Math.PI * 2)
+            ctx.fill()
+        }
+
+        // Mark texture for update
+        texture.needsUpdate = true
+    }
+
     _updateBloodParticles(deltaTime) {
         const scene = this.ctx?.viewer?.scene
         if (!scene) return
@@ -627,12 +838,19 @@ export class RagdollComponent extends Object3DComponent {
             const fadeProgress = age / particle.lifetime
             particle.mesh.material.opacity = 0.8 * (1 - fadeProgress)
 
-            // Stop at ground
-            if (particle.mesh.position.y < 0.1) {
-                particle.mesh.position.y = 0.1
-                particle.velocity.y = 0
-                particle.velocity.x *= 0.8
-                particle.velocity.z *= 0.8
+            // Check if hit ground
+            if (particle.mesh.position.y <= 0.1) {
+                // Create permanent blood stain on ground
+                this._createBloodStain(
+                    particle.mesh.position.x,
+                    particle.mesh.position.z
+                )
+
+                // Remove particle
+                scene.remove(particle.mesh)
+                particle.mesh.geometry.dispose()
+                particle.mesh.material.dispose()
+                this._bloodParticles.splice(i, 1)
             }
         }
     }
@@ -695,6 +913,8 @@ export class RagdollComponent extends Object3DComponent {
                 particle.mesh.geometry?.dispose()
                 particle.mesh.material?.dispose()
             }
+
+            // Note: Blood stains are drawn on shared texture, persist until game ends
         }
 
         this._bodies = []

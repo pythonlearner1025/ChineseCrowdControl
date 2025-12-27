@@ -96,7 +96,7 @@ export class BaseEnemyController extends Object3DComponent {
             this._animComp.scale = this._getAnimationScale()
             this._animComp.color = this._getAnimationColor()
             this._animComp.baseSpeed = this.speed
-            console.log('[BaseEnemyController] Added animation component')
+            //console.log('[BaseEnemyController] Added animation component')
         }
     }
 
@@ -376,7 +376,7 @@ export class BaseEnemyController extends Object3DComponent {
 
         // Clean up animation component (CRITICAL - removes the 10 frozen body parts!)
         if (this._animComp) {
-            console.log('[BaseEnemyController] Cleaning up animation component')
+            //console.log('[BaseEnemyController] Cleaning up animation component')
             this._animComp.cleanup()
             this._animComp = null
         }
@@ -433,13 +433,13 @@ export class BaseEnemyController extends Object3DComponent {
         const ragdoll = EntityComponentPlugin.GetComponent(ragdollObj, 'RagdollComponent')
 
         if (ragdoll) {
-            console.log('[BaseEnemyController] Spawning ragdoll at', position)
+            //console.log('[BaseEnemyController] Spawning ragdoll at', position)
 
             // Capture body states from animation for seamless transition
             const bodyStates = this._animComp ? this._animComp.getBodyStates() : null
 
             if (bodyStates) {
-                console.log('[BaseEnemyController] Using animated body states for ragdoll')
+                //console.log('[BaseEnemyController] Using animated body states for ragdoll')
             }
 
             // Spawn ragdoll with appropriate scale and color

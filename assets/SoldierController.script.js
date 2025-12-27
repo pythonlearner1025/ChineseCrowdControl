@@ -60,9 +60,9 @@ export class SoldierController extends Object3DComponent {
     }
 
     start() {
-        console.log('start', this.baseSpeed)
+        //console.log('start', this.baseSpeed)
         if (super.start) super.start()
-        console.log('[SoldierController] Soldier spawned')
+        //console.log('[SoldierController] Soldier spawned')
         
         this._velocity = new THREE.Vector3(0, 0, 0)
         this._displayedHealth = this.health
@@ -115,18 +115,18 @@ export class SoldierController extends Object3DComponent {
     select() {
         this._isSelected = true
         this._updateSelectionVisual()
-        console.log('[SoldierController] Selected')
+        //console.log('[SoldierController] Selected')
     }
 
     deselect() {
         this._isSelected = false
         this._updateSelectionVisual()
-        console.log('[SoldierController] Deselected')
+        //console.log('[SoldierController] Deselected')
     }
 
     setGroup(groupId) {
         this._groupId = groupId
-        console.log(`[SoldierController] Assigned to group ${groupId}`)
+        //console.log(`[SoldierController] Assigned to group ${groupId}`)
     }
 
     clearGroup() {
@@ -251,7 +251,7 @@ export class SoldierController extends Object3DComponent {
     moveTo(position) {
         this._targetPosition = position.clone()
         this._isMoving = true
-        console.log(`[SoldierController] Moving to ${position.x.toFixed(1)}, ${position.z.toFixed(1)}`)
+        //console.log(`[SoldierController] Moving to ${position.x.toFixed(1)}, ${position.z.toFixed(1)}`)
         
         // Wake up the render loop
         this.ctx?.viewer?.setDirty()
@@ -308,7 +308,7 @@ export class SoldierController extends Object3DComponent {
         const currentSpeed = this.getCurrentSpeed()
         if (currentSpeed > this.baseSpeed) {
             const scale = this.baseSpeed / currentSpeed
-            console.log('scale', scale)
+            //console.log('scale', scale)
             this._velocity.x *= scale
             this._velocity.z *= scale
         }
@@ -387,7 +387,7 @@ export class SoldierController extends Object3DComponent {
                         finalZ += pushZ
 
                         // Also apply a small push to the ragdoll body for realism
-                        const pushForce = 30 // Small force
+                        const pushForce = 15 // Small force
                         body.velocity.x -= (dx / distXZ) * pushForce
                         body.velocity.z -= (dz / distXZ) * pushForce
                         body.wakeUp() // Wake up the body if it was sleeping
@@ -689,7 +689,7 @@ export class SoldierController extends Object3DComponent {
         const effectiveDamage = Math.max(1, amount - this.armor)
         this.health -= effectiveDamage
 
-        console.log(`[SoldierController] Took ${effectiveDamage} damage (${this.health}/${this.maxHealth} HP)`)
+        //console.log(`[SoldierController] Took ${effectiveDamage} damage (${this.health}/${this.maxHealth} HP)`)
 
         if (this.health <= 0) {
             this._die(attacker)
@@ -697,7 +697,7 @@ export class SoldierController extends Object3DComponent {
     }
 
     _die(attacker = null) {
-        console.log('[SoldierController] Died!')
+        //console.log('[SoldierController] Died!')
         this.deselect()
 
         // Hide object first (ensure death happens)
@@ -752,7 +752,7 @@ export class SoldierController extends Object3DComponent {
         const ragdoll = EntityComponentPlugin.GetComponent(ragdollObj, 'RagdollComponent')
 
         if (ragdoll) {
-            console.log('[SoldierController] Spawning soldier ragdoll at', position)
+            //console.log('[SoldierController] Spawning soldier ragdoll at', position)
             // Spawn ragdoll with blue color for soldiers
             ragdoll.spawnRagdoll(position, velocity, {
                 scale: 1.0,
