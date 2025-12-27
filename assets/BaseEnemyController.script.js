@@ -374,6 +374,16 @@ export class BaseEnemyController extends Object3DComponent {
             this.object.visible = false
         }
 
+        // Clean up animation component (CRITICAL - removes the 10 frozen body parts!)
+        if (this._animComp) {
+            console.log('[BaseEnemyController] Cleaning up animation component')
+            this._animComp.cleanup()
+            this._animComp = null
+        }
+
+        // Remove health bar
+        this._removeHealthBar()
+
         // Try to spawn ragdoll (non-blocking)
         try {
             const worldPos = new THREE.Vector3()

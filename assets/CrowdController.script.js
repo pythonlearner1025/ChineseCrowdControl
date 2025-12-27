@@ -115,8 +115,23 @@ class CrowdMember {
             this.health = 0
             this.isAlive = false
 
+            // Get scene before hiding anything (needed for cleanup)
+            const scene = this.controller?.ctx?.viewer?.scene
+
             // Hide mesh first (ensure death happens)
             this.mesh.visible = false
+
+            // Clean up animation component (CRITICAL - removes the 10 frozen body parts!)
+            if (this.animationComponent) {
+                console.log('[CrowdMember] Cleaning up animation component')
+                this.animationComponent.cleanup()
+                this.animationComponent = null
+            }
+
+            // Remove health bar
+            if (scene) {
+                this.removeHealthBar(scene)
+            }
 
             // Try to spawn ragdoll (non-blocking)
             try {
