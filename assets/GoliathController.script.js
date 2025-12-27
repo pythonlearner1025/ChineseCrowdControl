@@ -35,6 +35,16 @@ export class GoliathController extends BaseEnemyController {
         super.start()
         this._lastGroundPound = 0
     }
+
+    // Animation overrides for larger scale and different color
+    _getAnimationScale() {
+        return 2.0  // Large goliath
+    }
+
+    _getAnimationColor() {
+        return 0xaa0000  // Dark red
+    }
+
     /*
     update(params) {
         // Always update health bar first (via super), then do Goliath-specific logic

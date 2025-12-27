@@ -45,6 +45,9 @@
       },
       {
         "import": "./assets/RagdollComponent.script.js"
+      },
+      {
+        "import": "./assets/HumanoidAnimationComponent.script.js"
       }
     ],
     "viewer": {},

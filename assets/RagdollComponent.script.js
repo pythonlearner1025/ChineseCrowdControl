@@ -35,7 +35,7 @@ export class RagdollComponent extends Object3DComponent {
      * @param {Object} options - { scale: 1.0, color: 0xff4444, enemyType: 'Enemy' }
      */
     spawnRagdoll(position, velocity, options = {}) {
-        const { scale = 1.0, color = 0xff4444, enemyType = 'Generic' } = options
+        const { scale = 1.0, color = 0xff4444, enemyType = 'Generic', bodyStates = null } = options
 
         this._spawnTime = Date.now()
         this._isActive = true
@@ -47,8 +47,12 @@ export class RagdollComponent extends Object3DComponent {
             return
         }
 
-        // Create bodies
-        this._createRagdollBodies(position, scale, color, physicsManager.world)
+        // Create bodies (use animated body states if available for seamless transition)
+        if (bodyStates) {
+            this._createRagdollBodiesFromStates(bodyStates, options, physicsManager.world)
+        } else {
+            this._createRagdollBodies(position, scale, color, physicsManager.world)
+        }
 
         // Create constraints/joints
         this._createRagdollConstraints(physicsManager.world)
@@ -210,6 +214,98 @@ export class RagdollComponent extends Object3DComponent {
             scene.add(mesh)
             this._meshes.push(mesh)
         }
+    }
+
+    _createRagdollBodiesFromStates(bodyStates, options, world) {
+        const { scale = 1.0, color = 0xff4444 } = options
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) return
+
+        // Material for ragdoll meshes
+        const material = new THREE.MeshStandardMaterial({
+            color: color,
+            roughness: 0.7,
+            metalness: 0.2
+        })
+
+        // Map body part names to configurations (matching HumanoidAnimationComponent)
+        const bodyPartConfigs = {
+            'head': { shape: 'sphere', radius: 0.25 * scale, mass: 2.0 },
+            'torso': { shape: 'box', size: new THREE.Vector3(0.5 * scale, 0.7 * scale, 0.3 * scale), mass: 10.0 },
+            'upperArmLeft': { shape: 'capsule', radius: 0.1 * scale, height: 0.5 * scale, mass: 1.5 },
+            'lowerArmLeft': { shape: 'capsule', radius: 0.08 * scale, height: 0.5 * scale, mass: 1.0 },
+            'upperArmRight': { shape: 'capsule', radius: 0.1 * scale, height: 0.5 * scale, mass: 1.5 },
+            'lowerArmRight': { shape: 'capsule', radius: 0.08 * scale, height: 0.5 * scale, mass: 1.0 },
+            'upperLegLeft': { shape: 'capsule', radius: 0.12 * scale, height: 0.6 * scale, mass: 3.0 },
+            'lowerLegLeft': { shape: 'capsule', radius: 0.1 * scale, height: 0.6 * scale, mass: 2.0 },
+            'upperLegRight': { shape: 'capsule', radius: 0.12 * scale, height: 0.6 * scale, mass: 3.0 },
+            'lowerLegRight': { shape: 'capsule', radius: 0.1 * scale, height: 0.6 * scale, mass: 2.0 }
+        }
+
+        // Create bodies from animated states
+        for (const [name, state] of Object.entries(bodyStates)) {
+            const config = bodyPartConfigs[name]
+            if (!config) {
+                console.warn(`[RagdollComponent] Unknown body part: ${name}`)
+                continue
+            }
+
+            // Create cannon.js shape
+            let cannonShape
+            if (config.shape === 'sphere') {
+                cannonShape = new CANNON.Sphere(config.radius)
+            } else if (config.shape === 'box') {
+                cannonShape = new CANNON.Box(new CANNON.Vec3(
+                    config.size.x / 2,
+                    config.size.y / 2,
+                    config.size.z / 2
+                ))
+            } else if (config.shape === 'capsule') {
+                cannonShape = new CANNON.Sphere(config.radius)
+            }
+
+            // Create physics body at exact animated position
+            const cannonBody = new CANNON.Body({
+                mass: config.mass,
+                shape: cannonShape,
+                position: new CANNON.Vec3(state.position.x, state.position.y, state.position.z),
+                quaternion: new CANNON.Quaternion(
+                    state.quaternion.x,
+                    state.quaternion.y,
+                    state.quaternion.z,
+                    state.quaternion.w
+                ),
+                velocity: new CANNON.Vec3(state.velocity.x, state.velocity.y, state.velocity.z),
+                linearDamping: 0.01,
+                angularDamping: 0.01
+            })
+
+            cannonBody.userData = { name: name }
+            world.addBody(cannonBody)
+            this._bodies.push(cannonBody)
+
+            // Create three.js mesh at same position
+            let geometry
+            if (config.shape === 'sphere') {
+                geometry = new THREE.SphereGeometry(config.radius, 16, 16)
+            } else if (config.shape === 'box') {
+                geometry = new THREE.BoxGeometry(config.size.x, config.size.y, config.size.z)
+            } else if (config.shape === 'capsule') {
+                geometry = new THREE.CapsuleGeometry(config.radius, config.height, 8, 16)
+            }
+
+            const mesh = new THREE.Mesh(geometry, material.clone())
+            mesh.position.copy(state.position)
+            mesh.quaternion.copy(state.quaternion)
+            mesh.castShadow = true
+            mesh.receiveShadow = true
+            mesh.userData = { name: name }
+
+            scene.add(mesh)
+            this._meshes.push(mesh)
+        }
+
+        console.log(`[RagdollComponent] Created ragdoll from ${Object.keys(bodyStates).length} animated body states`)
     }
 
     _createRagdollConstraints(world) {

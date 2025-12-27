@@ -8,7 +8,8 @@ class CrowdMember {
     constructor(mesh, controller) {
         this.mesh = mesh
         this.controller = controller
-        
+        this.animationComponent = null  // For procedural humanoid animation
+
         // Stats
         this.health = 50
         this.maxHealth = 50
@@ -17,7 +18,7 @@ class CrowdMember {
         this.attackRange = 1.5
         this.detectionRange = 100
         this.attackFrequency = 1
-        
+
         // State
         this.isAlive = true
         this.velocity = new THREE.Vector3()
@@ -303,6 +304,21 @@ export class CrowdController extends Object3DComponent {
         member.damage = this.memberDamage
         member.addHealthBarToScene(scene)
 
+        // Add humanoid animation component
+        this.ctx.ecp.addComponent(mesh, 'HumanoidAnimationComponent')
+        const animComp = EntityComponentPlugin.GetComponent(mesh, 'HumanoidAnimationComponent')
+        if (animComp) {
+            animComp.scale = 0.8
+            animComp.color = 0xff8844
+            animComp.baseSpeed = this.memberSpeed
+            animComp.walkCycleSpeed = 8
+            animComp.legSwingAngle = Math.PI / 6
+            animComp.armSwingAngle = Math.PI / 9
+            animComp.torsoBobbingHeight = 0.08
+            member.animationComponent = animComp
+            console.log('[CrowdController] Added animation component to crowd member')
+        }
+
         this._members.push(member)
         return member
     }
@@ -332,11 +348,21 @@ export class CrowdController extends Object3DComponent {
 
         if (ragdoll) {
             console.log('[CrowdController] Spawning crowd member ragdoll at', position)
+
+            // Capture body states from animation for seamless transition
+            const bodyStates = member.animationComponent ?
+                member.animationComponent.getBodyStates() : null
+
+            if (bodyStates) {
+                console.log('[CrowdController] Using animated body states for ragdoll')
+            }
+
             // Spawn ragdoll with smaller scale for crowd members
             ragdoll.spawnRagdoll(position, velocity, {
                 scale: 0.8, // Smaller for crowd
                 color: 0xff8844, // Orange for crowd
-                enemyType: 'CrowdMember'
+                enemyType: 'CrowdMember',
+                bodyStates: bodyStates
             })
         } else {
             console.warn('[CrowdController] Failed to get RagdollComponent')

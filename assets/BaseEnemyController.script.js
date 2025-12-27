@@ -42,6 +42,9 @@ export class BaseEnemyController extends Object3DComponent {
     _velocity = null
     _displayedHealth = 100
 
+    // Animation
+    _animComp = null
+
     // Health bar
     _healthBarGroup = null
     _healthBarFill = null
@@ -67,6 +70,9 @@ export class BaseEnemyController extends Object3DComponent {
 
         // Create health bar
         this._createHealthBar()
+
+        // Setup humanoid animation
+        this._setupAnimation()
     }
 
     stop() {
@@ -76,6 +82,30 @@ export class BaseEnemyController extends Object3DComponent {
 
         // Cleanup health bar
         this._removeHealthBar()
+    }
+
+    // ==================== ANIMATION ====================
+
+    _setupAnimation() {
+        if (!this.object || !this.ctx?.ecp) return
+
+        this.ctx.ecp.addComponent(this.object, 'HumanoidAnimationComponent')
+        this._animComp = EntityComponentPlugin.GetComponent(this.object, 'HumanoidAnimationComponent')
+
+        if (this._animComp) {
+            this._animComp.scale = this._getAnimationScale()
+            this._animComp.color = this._getAnimationColor()
+            this._animComp.baseSpeed = this.speed
+            console.log('[BaseEnemyController] Added animation component')
+        }
+    }
+
+    _getAnimationScale() {
+        return 1.0  // Override in subclasses (e.g., Goliath = 2.0)
+    }
+
+    _getAnimationColor() {
+        return 0xff4444  // Red for base enemies
     }
 
     // ==================== HEALTH BAR ====================
@@ -394,11 +424,20 @@ export class BaseEnemyController extends Object3DComponent {
 
         if (ragdoll) {
             console.log('[BaseEnemyController] Spawning ragdoll at', position)
+
+            // Capture body states from animation for seamless transition
+            const bodyStates = this._animComp ? this._animComp.getBodyStates() : null
+
+            if (bodyStates) {
+                console.log('[BaseEnemyController] Using animated body states for ragdoll')
+            }
+
             // Spawn ragdoll with appropriate scale and color
             ragdoll.spawnRagdoll(position, velocity, {
-                scale: 1.0,
-                color: 0xff4444, // Red for enemies
-                enemyType: this.name
+                scale: this._getAnimationScale(),
+                color: this._getAnimationColor(),
+                enemyType: this.name,
+                bodyStates: bodyStates
             })
         } else {
             console.warn('[BaseEnemyController] Failed to get RagdollComponent')
