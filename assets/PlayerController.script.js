@@ -1,17 +1,19 @@
 import {Object3DComponent, EntityComponentPlugin} from 'threepipe'
 import * as THREE from 'three'
+import {CollisionSystem} from './CollisionSystem.js'
 
 /**
- * WASD movement controller for player objects with combat attributes
+ * WASD movement controller for robot tire units with combat attributes
+ * (Formerly PlayerController - renamed for clarity)
  */
-export class PlayerController extends Object3DComponent {
+export class RobotTireController extends Object3DComponent {
     static StateProperties = [
         'running', 'speed', 'health', 'maxHealth', 'armor',
         'attackRange', 'damage', 'attackFrequency', 'invulnerabilityTime',
         'projectileSpeed', 'projectileSize', 'projectileColor',
         'autoFire', 'homingStrength', 'mass', 'friction', 'healthRegen'
     ]
-    static ComponentType = 'PlayerController'
+    static ComponentType = 'RobotTireController'
 
     running = true
     speed = 10 // units per second (max speed)
@@ -645,33 +647,25 @@ export class PlayerController extends Object3DComponent {
 
     _checkEntityCollisions() {
         if (!this.isAlive || !this.object) return
-        
+
         const viewer = this.ctx?.viewer
         if (!viewer) return
-        
+
+        // Use CollisionSystem for physics-based collisions with all entities
+        CollisionSystem.checkCollisions(this.object, this, this._velocity, {
+            collisionRadius: this.collisionRadius,
+            applyPhysics: true,          // Apply momentum transfer
+            dealDamage: false,           // Player takes damage from enemies, not dealt by collision
+            cooldownMap: this._collisionCooldowns,
+            cooldownMs: this.collisionDamageCooldown,
+            collideWith: ['BaseEnemyController', 'GoliathController', 'SoldierController']
+        })
+
+        // Still need to handle crowd members separately (not in CollisionSystem yet)
         const myPos = this.object.position
         const now = Date.now()
-        
-        // Check all objects in scene for collision
+
         viewer.scene.traverse((obj) => {
-            if (obj === this.object) return
-            
-            // Check for soldiers
-            const soldier = EntityComponentPlugin.GetComponent(obj, 'SoldierController')
-            if (soldier && soldier.isAlive) {
-                this._handleEntityCollision(obj, soldier, myPos, now, soldier.damage || 5)
-                return
-            }
-            
-            // Check for base enemies
-            const enemy = EntityComponentPlugin.GetComponent(obj, 'BaseEnemyController') ||
-                          EntityComponentPlugin.GetComponent(obj, 'GoliathController')
-            if (enemy && enemy.isAlive) {
-                this._handleEntityCollision(obj, enemy, myPos, now, enemy.damage || 10)
-                return
-            }
-            
-            // Check for CrowdController to get crowd members
             const crowdController = EntityComponentPlugin.GetComponent(obj, 'CrowdController')
             if (crowdController && crowdController._members) {
                 for (const member of crowdController._members) {
@@ -681,28 +675,15 @@ export class PlayerController extends Object3DComponent {
             }
         })
     }
-    
-    _handleEntityCollision(obj, entity, myPos, now, damage) {
-        const dist = myPos.distanceTo(obj.position)
-        
-        if (dist < this.collisionRadius) {
-            // Check cooldown
-            const lastHit = this._collisionCooldowns.get(entity) || 0
-            if (now - lastHit < this.collisionDamageCooldown) return
-            
-            this._collisionCooldowns.set(entity, now)
-            this.takeDamage(damage, entity)
-        }
-    }
-    
+
     _handleCrowdMemberCollision(member, myPos, now) {
         const dist = myPos.distanceTo(member.mesh.position)
-        
+
         if (dist < this.collisionRadius) {
             // Check cooldown
             const lastHit = this._collisionCooldowns.get(member) || 0
             if (now - lastHit < this.collisionDamageCooldown) return
-            
+
             this._collisionCooldowns.set(member, now)
             this.takeDamage(member.damage || 5, member)
         }
@@ -783,19 +764,19 @@ export class PlayerController extends Object3DComponent {
 
             this._spawnRagdoll(worldPos, impactVelocity)
         } catch (error) {
-            console.error('[PlayerController] Error spawning ragdoll:', error)
+            console.error('[RobotTireController] Error spawning ragdoll:', error)
         }
     }
 
     _spawnRagdoll(position, velocity) {
         const scene = this.ctx?.viewer?.scene
         if (!scene) {
-            console.warn('[PlayerController] No scene found for ragdoll')
+            console.warn('[RobotTireController] No scene found for ragdoll')
             return
         }
 
         if (!this.ctx?.ecp) {
-            console.warn('[PlayerController] ECP not available for ragdoll')
+            console.warn('[RobotTireController] ECP not available for ragdoll')
             return
         }
 
@@ -819,7 +800,7 @@ export class PlayerController extends Object3DComponent {
                 enemyType: 'Player'
             })
         } else {
-            console.warn('[PlayerController] Failed to get RagdollComponent')
+            console.warn('[RobotTireController] Failed to get RagdollComponent')
         }
     }
 
@@ -841,7 +822,7 @@ export class PlayerController extends Object3DComponent {
     
     uiConfig = {
         type: 'folder',
-        label: 'Player Controller',
+        label: 'Robot Tire Controller',
         children: [
             {
                 type: 'button',
@@ -855,4 +836,9 @@ export class PlayerController extends Object3DComponent {
             },
         ],
     }
+}
+
+// Keep PlayerController as an alias for backward compatibility
+export class PlayerController extends RobotTireController {
+    static ComponentType = 'PlayerController'
 }

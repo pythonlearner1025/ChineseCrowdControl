@@ -1,13 +1,15 @@
 import {Object3DComponent, EntityComponentPlugin} from 'threepipe'
 import * as THREE from 'three'
 import {getPhysicsWorldManager} from './PhysicsWorldController.script.js'
+import {CollisionSystem} from './CollisionSystem.js'
 
 /**
  * SoldierController - Individual soldier with selection and movement commands
  */
 export class SoldierController extends Object3DComponent {
     static StateProperties = [
-       'enabled', 'health', 'maxHealth', 'armor', 'damage'
+       'enabled', 'health', 'maxHealth', 'armor', 'damage',
+       'detectionRange', 'attackRange'
     ]
     static ComponentType = 'SoldierController'
 
@@ -22,14 +24,20 @@ export class SoldierController extends Object3DComponent {
     damage = 10         // base damage on impact
     impactDamageScale = 5.0  // damage multiplier per unit of speed
 
+    // Auto-attack attributes
+    detectionRange = 25  // how far they can detect enemies
+    attackRange = 2      // melee range
+
     // Selection state
     _isSelected = false
     _groupId = null // e.g., 1, 2, 3...
 
     // Movement state
     _targetPosition = null
+    _userTargetPosition = null  // user-commanded target (takes priority)
     _velocity = null
     _isMoving = false
+    _autoTargetEnemy = null  // current auto-attack target
 
     // Visuals
     _selectionRing = null
@@ -249,41 +257,110 @@ export class SoldierController extends Object3DComponent {
     // ==================== MOVEMENT ====================
 
     moveTo(position) {
+        this._userTargetPosition = position.clone()
         this._targetPosition = position.clone()
         this._isMoving = true
+        this._autoTargetEnemy = null  // clear auto-target when user gives command
         //console.log(`[SoldierController] Moving to ${position.x.toFixed(1)}, ${position.z.toFixed(1)}`)
-        
+
         // Wake up the render loop
         this.ctx?.viewer?.setDirty()
     }
 
     stopMoving() {
         this._targetPosition = null
+        this._userTargetPosition = null
         this._isMoving = false
+        this._autoTargetEnemy = null
     }
 
     _updateMovement(dt) {
-        if (!this._targetPosition || !this._isMoving) {
-            this._applyPhysics(dt, 0, 0)
+        // Priority 1: User command
+        if (this._userTargetPosition) {
+            const myPos = this.object.position
+            const dx = this._userTargetPosition.x - myPos.x
+            const dz = this._userTargetPosition.z - myPos.z
+            const dist = Math.sqrt(dx * dx + dz * dz)
+
+            // Reached destination
+            if (dist < 0.5) {
+                this._userTargetPosition = null
+                this._targetPosition = null
+                this._isMoving = false
+                this._applyPhysics(dt, 0, 0)
+                return
+            }
+
+            // Move towards user target
+            const inputX = dx / dist
+            const inputZ = dz / dist
+            this._applyPhysics(dt, inputX, inputZ)
+
+            // Still attack enemies in range while moving
+            this._checkEnemyCollisions()
             return
         }
+
+        // Priority 2: Auto-attack nearest enemy
+        const nearestEnemy = this._findNearestEnemy()
+
+        if (nearestEnemy && nearestEnemy.distance <= this.detectionRange) {
+            this._autoTargetEnemy = nearestEnemy.object
+            this._targetPosition = nearestEnemy.object.position.clone()
+            this._isMoving = true
+
+            const myPos = this.object.position
+            const dx = this._targetPosition.x - myPos.x
+            const dz = this._targetPosition.z - myPos.z
+            const dist = Math.sqrt(dx * dx + dz * dz)
+
+            // If in attack range, stop and attack
+            if (dist <= this.attackRange) {
+                this._applyPhysics(dt, 0, 0)
+                this._checkEnemyCollisions()  // deals damage
+                return
+            }
+
+            // Move towards enemy
+            const inputX = dx / dist
+            const inputZ = dz / dist
+            this._applyPhysics(dt, inputX, inputZ)
+            this._checkEnemyCollisions()
+            return
+        }
+
+        // Priority 3: Idle (no command, no enemies)
+        this._autoTargetEnemy = null
+        this._targetPosition = null
+        this._isMoving = false
+        this._applyPhysics(dt, 0, 0)
+    }
+
+    _findNearestEnemy() {
+        const viewer = this.ctx?.viewer
+        if (!viewer) return null
 
         const myPos = this.object.position
-        const dx = this._targetPosition.x - myPos.x
-        const dz = this._targetPosition.z - myPos.z
-        const dist = Math.sqrt(dx * dx + dz * dz)
+        let closest = null
+        let closestDist = this.detectionRange
 
-        // Reached destination
-        if (dist < 0.5) {
-            this.stopMoving()
-            this._applyPhysics(dt, 0, 0)
-            return
-        }
+        viewer.scene.traverse((obj) => {
+            if (obj === this.object) return
 
-        // Move towards target
-        const inputX = dx / dist
-        const inputZ = dz / dist
-        this._applyPhysics(dt, inputX, inputZ)
+            // Check for enemy controllers
+            const enemy = EntityComponentPlugin.GetComponent(obj, 'BaseEnemyController') ||
+                          EntityComponentPlugin.GetComponent(obj, 'GoliathController')
+
+            if (enemy && enemy.isAlive) {
+                const dist = myPos.distanceTo(obj.position)
+                if (dist < closestDist) {
+                    closestDist = dist
+                    closest = { object: obj, controller: enemy, distance: dist }
+                }
+            }
+        })
+
+        return closest
     }
 
     _applyPhysics(dt, inputX, inputZ) {
@@ -414,181 +491,49 @@ export class SoldierController extends Object3DComponent {
         const viewer = this.ctx?.viewer
         if (!viewer) return
 
-        const myPos = this.object.position
         const currentSpeed = this.getCurrentSpeed()
-        
+
+        // Use CollisionSystem for physics-based collisions
+        CollisionSystem.checkCollisions(this.object, this, this._velocity, {
+            collisionRadius: 1.5,
+            applyPhysics: true,                           // Apply momentum transfer
+            dealDamage: true,                             // Soldiers deal damage on collision
+            baseDamage: currentSpeed > 0.01 ? this.damage : 0,  // Base damage only if moving
+            collisionDamageScale: this.impactDamageScale, // Speed-scaled damage
+            cooldownMap: this._impactCooldowns,
+            cooldownMs: this._impactCooldownMs,
+            collideWith: ['BaseEnemyController', 'GoliathController', 'PlayerController', 'RobotTireController', 'SoldierController']
+        })
+
+        // Visual feedback for high-speed collisions
+        if (currentSpeed > 0.01) {
+            // Check if we just collided (cooldown map has recent entries)
+            const now = Date.now()
+            let hadRecentCollision = false
+            for (const [entity, time] of this._impactCooldowns.entries()) {
+                if (now - time < 100) { // Within 100ms
+                    hadRecentCollision = true
+                    break
+                }
+            }
+            if (hadRecentCollision) {
+                this._createImpactEffect(this.object.position)
+            }
+        }
+
+        // Handle crowd collisions separately (not in CollisionSystem yet)
+        const myPos = this.object.position
         const now = Date.now()
-        const hitRadius = 1.5 // collision radius
 
         viewer.scene.traverse((obj) => {
-            if (obj === this.object) return
-
-            // Check for PlayerController - apply Newton's 3rd law with mass
-            const player = EntityComponentPlugin.GetComponent(obj, 'PlayerController')
-            if (player && player.isAlive) {
-                const dist = myPos.distanceTo(obj.position)
-                
-                if (dist < hitRadius) {
-                    this._applyMassBasedCollision(player, obj.position, now, hitRadius, dist)
-                }
-            }
-
-            // Check for enemy controllers (BaseEnemy, Goliath)
-            const enemy = EntityComponentPlugin.GetComponent(obj, 'BaseEnemyController') ||
-                          EntityComponentPlugin.GetComponent(obj, 'GoliathController')
-
-            if (enemy && enemy.isAlive) {
-                const dist = myPos.distanceTo(obj.position)
-                
-                if (dist < hitRadius) {
-                    // Check cooldown for this specific enemy
-                    const lastImpact = this._impactCooldowns.get(enemy) || 0
-                    if (now - lastImpact < this._impactCooldownMs) return
-
-                    // Calculate impact damage: base + speed-scaled damage
-                    const impactDamage = currentSpeed > 0.01 
-                        ? this.damage + (currentSpeed * this.impactDamageScale)
-                        : 0
-                    
-                    if (impactDamage > 0 && typeof enemy.takeDamage === 'function') {
-                        enemy.takeDamage(impactDamage, this)
-                    }
-
-                    // Set cooldown
-                    this._impactCooldowns.set(enemy, now)
-
-                    // Apply mass-based pushback to both
-                    const enemyMass = enemy.mass || 5.0
-                    this._applyMutualPushback(obj.position, enemyMass, enemy._velocity || enemy.velocity, hitRadius, dist)
-
-                    // Visual feedback
-                    if (currentSpeed > 0.01) {
-                        this._createImpactEffect(myPos)
-                    }
-                }
-            }
-
-            // Also check for CrowdController to get crowd members
             const crowdController = EntityComponentPlugin.GetComponent(obj, 'CrowdController')
             if (crowdController && crowdController._members) {
-                this._checkCrowdCollisions(crowdController, myPos, currentSpeed, now, hitRadius)
+                this._checkCrowdCollisions(crowdController, myPos, currentSpeed, now, 1.5)
             }
         })
     }
 
-    /**
-     * Newton's 3rd law collision - equal and opposite forces, different accelerations based on mass
-     * Player has low mass (0.5) so gets pushed way more than heavy soldier (10.0)
-     */
-    _applyMassBasedCollision(entity, entityPos, now, hitRadius, dist) {
-        // Check cooldown
-        const lastImpact = this._impactCooldowns.get(entity) || 0
-        if (now - lastImpact < this._impactCooldownMs) return
-        this._impactCooldowns.set(entity, now)
-
-        const myPos = this.object.position
-        const currentSpeed = this.getCurrentSpeed()
-        
-        // Calculate impact damage if moving fast enough
-        if (currentSpeed > 0.01) {
-            const impactDamage = this.damage + (currentSpeed * this.impactDamageScale)
-            if (typeof entity.takeDamage === 'function') {
-                entity.takeDamage(impactDamage, this)
-            }
-        }
-
-        // Get masses (soldier is heavy, player is light)
-        const myMass = this.mass  // 10.0
-        const entityMass = entity.mass || 1.0  // Player is 0.5
-        
-        // Direction from entity to soldier
-        const pushDir = new THREE.Vector3()
-            .subVectors(myPos, entityPos)
-            .normalize()
-        
-        // Calculate relative velocity (for momentum transfer)
-        const entityVel = entity._velocity || new THREE.Vector3()
-        const relVelX = this._velocity.x - (entityVel.x || 0)
-        const relVelZ = this._velocity.z - (entityVel.z || 0)
-        const relSpeed = Math.sqrt(relVelX * relVelX + relVelZ * relVelZ)
-        
-        // Collision impulse strength (exaggerated for gameplay feel)
-        const impactForce = relSpeed * 3.0  // base collision force multiplier
-        
-        // Newton's 3rd law: F = ma, so a = F/m
-        // Lighter objects accelerate more from same force
-        // Push entity (player) HARD - they're light!
-        const entityPushStrength = impactForce * (myMass / entityMass) * 2.0
-        // Push self (soldier) less - we're heavy
-        const selfPushStrength = impactForce * (entityMass / myMass) * 0.5
-        
-        // Apply pushback to entity (player gets yeeted)
-        if (entity._velocity) {
-            entity._velocity.x -= pushDir.x * entityPushStrength
-            entity._velocity.z -= pushDir.z * entityPushStrength
-        }
-        
-        // Apply pushback to self (soldier barely budges)
-        this._velocity.x += pushDir.x * selfPushStrength
-        this._velocity.z += pushDir.z * selfPushStrength
-        
-        // Separate overlapping entities
-        if (dist < hitRadius * 0.8) {
-            const overlap = hitRadius * 0.8 - dist
-            const separationRatio = entityMass / (myMass + entityMass)
-            this.object.position.x += pushDir.x * overlap * separationRatio
-            this.object.position.z += pushDir.z * overlap * separationRatio
-        }
-
-        if (currentSpeed > 0.01) {
-            this._createImpactEffect(myPos)
-        }
-    }
-
-    /**
-     * Apply mutual pushback between soldier and another entity with mass
-     */
-    _applyMutualPushback(entityPos, entityMass, entityVelocity, hitRadius, dist) {
-        const myPos = this.object.position
-        const myMass = this.mass
-        
-        // Direction from entity to soldier
-        const pushDir = new THREE.Vector3()
-            .subVectors(myPos, entityPos)
-            .normalize()
-        
-        // Calculate relative velocity
-        const entityVel = entityVelocity || { x: 0, z: 0 }
-        const relVelX = this._velocity.x - (entityVel.x || 0)
-        const relVelZ = this._velocity.z - (entityVel.z || 0)
-        const relSpeed = Math.sqrt(relVelX * relVelX + relVelZ * relVelZ)
-        
-        // Collision impulse
-        const impactForce = relSpeed * 2.0
-        
-        // Newton's 3rd law distribution
-        const totalMass = myMass + entityMass
-        const entityPushStrength = impactForce * (myMass / totalMass)
-        const selfPushStrength = impactForce * (entityMass / totalMass)
-        
-        // Push entity
-        if (entityVelocity) {
-            entityVelocity.x -= pushDir.x * entityPushStrength
-            entityVelocity.z -= pushDir.z * entityPushStrength
-        }
-        
-        // Push self
-        this._velocity.x += pushDir.x * selfPushStrength
-        this._velocity.z += pushDir.z * selfPushStrength
-        
-        // Separate overlapping
-        if (dist < hitRadius * 0.8) {
-            const overlap = hitRadius * 0.8 - dist
-            const separationRatio = entityMass / totalMass
-            this.object.position.x += pushDir.x * overlap * separationRatio
-            this.object.position.z += pushDir.z * overlap * separationRatio
-        }
-    }
+    // Collision methods removed - now using unified CollisionSystem
 
     _checkCrowdCollisions(crowdController, myPos, currentSpeed, now, hitRadius) {
         for (const member of crowdController._members) {

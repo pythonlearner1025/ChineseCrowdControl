@@ -18,6 +18,7 @@ class CrowdMember {
         this.attackRange = 1.5
         this.detectionRange = 100
         this.attackFrequency = 1
+        this.mass = 1.5  // For collision physics
 
         // State
         this.isAlive = true

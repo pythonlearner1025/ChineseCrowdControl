@@ -1,5 +1,6 @@
 import {Object3DComponent, EntityComponentPlugin} from 'threepipe'
 import * as THREE from 'three'
+import {CollisionSystem} from './CollisionSystem.js'
 
 /**
  * BaseEnemyController - Base class for all enemy types with A* pathfinding
@@ -29,8 +30,14 @@ export class BaseEnemyController extends Object3DComponent {
     mass = 1.5            // enemies are slightly heavier
     friction = 6          // how fast they stop
 
+    // Collision attributes
+    collisionRadius = 1.2  // Reduced from 1.5 to allow easier passage
+    enableCollisions = true
+
     // Internal state
     _player = null
+    _cityHall = null          // cache City Hall reference
+    _currentTarget = null     // current attack target (player, soldier, or City Hall)
     _lastAttackTime = 0
     _isAlive = true
     _path = []
@@ -41,6 +48,9 @@ export class BaseEnemyController extends Object3DComponent {
     // Physics state
     _velocity = null
     _displayedHealth = 100
+
+    // Collision state
+    _collisionCooldowns = null
 
     // Animation
     _animComp = null
@@ -68,6 +78,9 @@ export class BaseEnemyController extends Object3DComponent {
         this._velocity = new THREE.Vector3(0, 0, 0)
         this._displayedHealth = this.health
 
+        // Initialize collision tracking
+        this._collisionCooldowns = new Map()
+
         // Create health bar
         this._createHealthBar()
 
@@ -76,6 +89,14 @@ export class BaseEnemyController extends Object3DComponent {
     }
 
     stop() {
+        // Clean up animation component BEFORE calling super.stop()
+        // This removes the humanoid body parts from the scene
+        if (this._animComp) {
+            //console.log('[BaseEnemyController] Cleaning up animation component on stop')
+            this._animComp.cleanup()
+            this._animComp = null
+        }
+
         if (super.stop) super.stop()
         this._player = null
         this._path = []
@@ -88,6 +109,18 @@ export class BaseEnemyController extends Object3DComponent {
 
     _setupAnimation() {
         if (!this.object || !this.ctx?.ecp) return
+
+        // Check if object already has visual geometry (e.g., vehicle meshes)
+        // If it has children (that aren't health bars), skip humanoid animation
+        const hasVisuals = this.object.children.some(child =>
+            child.type === 'Mesh' || (child.type === 'Group' && child.name !== 'HealthBar')
+        )
+
+        if (hasVisuals) {
+            console.log('[BaseEnemyController] Object already has visual geometry, skipping humanoid animation')
+            this._animComp = null
+            return
+        }
 
         this.ctx.ecp.addComponent(this.object, 'HumanoidAnimationComponent')
         this._animComp = EntityComponentPlugin.GetComponent(this.object, 'HumanoidAnimationComponent')
@@ -214,10 +247,11 @@ export class BaseEnemyController extends Object3DComponent {
         const scene = this.ctx?.viewer?.scene
         if (!scene) return null
 
-        // Look for object with PlayerController component
+        // Look for object with PlayerController or RobotTireController component
         scene.traverse((obj) => {
             if (this._player) return
-            const controller = EntityComponentPlugin.GetComponent(obj, 'PlayerController')
+            const controller = EntityComponentPlugin.GetComponent(obj, 'PlayerController') ||
+                              EntityComponentPlugin.GetComponent(obj, 'RobotTireController')
             if (controller) {
                 this._player = obj
             }
@@ -229,6 +263,85 @@ export class BaseEnemyController extends Object3DComponent {
         }
 
         return this._player
+    }
+
+    _findCityHall() {
+        // Find City Hall object in scene (cache it)
+        if (this._cityHall) {
+            // Verify it still exists and is alive
+            const hallComponent = EntityComponentPlugin.GetComponent(this._cityHall, 'CityHall')
+            if (hallComponent && hallComponent.isAlive) {
+                return this._cityHall
+            }
+            this._cityHall = null
+        }
+
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) return null
+
+        // Look for object with CityHall component
+        scene.traverse((obj) => {
+            if (this._cityHall) return
+            const controller = EntityComponentPlugin.GetComponent(obj, 'CityHall')
+            if (controller && controller.isAlive) {
+                this._cityHall = obj
+            }
+        })
+
+        return this._cityHall
+    }
+
+    _findTarget() {
+        // Priority-based targeting system
+        // Case 1: Find closest entity (player or soldier) within detection range
+        // Case 2: If nothing in range, target City Hall
+
+        const myPos = this.object.position
+        let closestEntity = null
+        let closestDistance = this.detectionRange
+
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) return null
+
+        // Check all potential targets in scene
+        scene.traverse((obj) => {
+            if (obj === this.object) return
+
+            let controller = null
+            let isValidTarget = false
+
+            // Check for player (PlayerController or RobotTireController)
+            controller = EntityComponentPlugin.GetComponent(obj, 'PlayerController') ||
+                        EntityComponentPlugin.GetComponent(obj, 'RobotTireController')
+            if (controller && controller.isAlive) {
+                isValidTarget = true
+            }
+
+            // Check for friendly soldiers
+            if (!isValidTarget) {
+                controller = EntityComponentPlugin.GetComponent(obj, 'SoldierController')
+                if (controller && controller.isAlive) {
+                    isValidTarget = true
+                }
+            }
+
+            // If valid target, check distance
+            if (isValidTarget) {
+                const dist = myPos.distanceTo(obj.position)
+                if (dist < closestDistance) {
+                    closestDistance = dist
+                    closestEntity = obj
+                }
+            }
+        })
+
+        // Case 1: Found entity in range
+        if (closestEntity) {
+            return closestEntity
+        }
+
+        // Case 2: No entity in range, target City Hall
+        return this._findCityHall()
     }
 
     // ==================== A* PATHFINDING ====================
@@ -465,13 +578,18 @@ export class BaseEnemyController extends Object3DComponent {
 
         this._lastAttackTime = now
 
-        // Try to damage the player
-        const playerController = EntityComponentPlugin.GetComponent(target, 'PlayerController')
-        if (playerController && typeof playerController.takeDamage === 'function') {
-            playerController.takeDamage(this.damage, this)
+        // Try to damage the target (player, soldier, or City Hall)
+        const targetController = EntityComponentPlugin.GetComponent(target, 'PlayerController') ||
+                                EntityComponentPlugin.GetComponent(target, 'RobotTireController') ||
+                                EntityComponentPlugin.GetComponent(target, 'SoldierController') ||
+                                EntityComponentPlugin.GetComponent(target, 'CityHall')
+
+        if (targetController && typeof targetController.takeDamage === 'function') {
+            targetController.takeDamage(this.damage, this)
+            return true
         }
 
-        return true
+        return false
     }
 
     // ==================== PHYSICS ====================
@@ -483,6 +601,13 @@ export class BaseEnemyController extends Object3DComponent {
 
         // Calculate acceleration based on input and mass
         const acceleration = this.speed * 2 / this.mass
+
+        // DEBUG for EVs
+        const isEV = this.name === 'EV'
+        if (isEV && Math.random() < 0.01) {
+            console.log(`[EV Physics] dt=${dt.toFixed(4)}, acceleration=${acceleration.toFixed(2)}`)
+            console.log(`  Before: velocity=(${this._velocity.x.toFixed(3)}, ${this._velocity.z.toFixed(3)})`)
+        }
 
         // Apply input force
         if (inputX !== 0 || inputZ !== 0) {
@@ -503,6 +628,10 @@ export class BaseEnemyController extends Object3DComponent {
             this._velocity.z *= scale
         }
 
+        if (isEV && Math.random() < 0.01) {
+            console.log(`  After: velocity=(${this._velocity.x.toFixed(3)}, ${this._velocity.z.toFixed(3)}), speed=${currentSpeed.toFixed(3)}`)
+        }
+
         // Apply velocity to position
         this.object.position.x += this._velocity.x * dt
         this.object.position.z += this._velocity.z * dt
@@ -518,8 +647,8 @@ export class BaseEnemyController extends Object3DComponent {
             this.object.rotation.y += rotDiff * Math.min(1, 10 * dt)
         }
 
-        // Stop if very slow
-        if (currentSpeed < 0.01) {
+        // Stop if very slow (lower threshold to 0.001 to allow slow buildup)
+        if (currentSpeed < 0.001) {
             this._velocity.x = 0
             this._velocity.z = 0
         }
@@ -541,39 +670,33 @@ export class BaseEnemyController extends Object3DComponent {
             return this._velocity && this._velocity.lengthSq() > 0.001
         }
 
-        // Find player if not cached
-        if (!this._player) {
-            this._findPlayer()
-            if (!this._player) {
-                this._applyPhysics(dt, 0, 0)
-                return false
-            }
+        // Find target using priority system
+        this._currentTarget = this._findTarget()
+
+        if (!this._currentTarget) {
+            // No target found (no City Hall, no entities)
+            this._applyPhysics(dt, 0, 0)
+            return false
         }
 
         const myPos = this.object.position
-        const playerPos = this._player.position
-        const distToPlayer = Math.sqrt(
-            Math.pow(playerPos.x - myPos.x, 2) +
-            Math.pow(playerPos.z - myPos.z, 2)
+        const targetPos = this._currentTarget.position
+        const distToTarget = Math.sqrt(
+            Math.pow(targetPos.x - myPos.x, 2) +
+            Math.pow(targetPos.z - myPos.z, 2)
         )
 
-        // Check if player is within detection range
-        if (distToPlayer > this.detectionRange) {
-            this._applyPhysics(dt, 0, 0) // idle, just apply friction
-            return this._velocity && this._velocity.lengthSq() > 0.001
-        }
-
         // Within attack range - attack!
-        if (distToPlayer <= this.attackRange) {
-            this._attack(this._player)
+        if (distToTarget <= this.attackRange) {
+            this._attack(this._currentTarget)
             this._applyPhysics(dt, 0, 0) // stop moving when attacking
             return true
         }
 
-        // Move towards player using A*
+        // Move towards target using A*
         const now = Date.now()
         if (now - this._lastPathUpdate > this._pathUpdateInterval || this._path.length === 0) {
-            this._path = this._findPath(myPos.x, myPos.z, playerPos.x, playerPos.z)
+            this._path = this._findPath(myPos.x, myPos.z, targetPos.x, targetPos.z)
             this._pathIndex = 0
             this._lastPathUpdate = now
         }
@@ -598,8 +721,24 @@ export class BaseEnemyController extends Object3DComponent {
             }
         }
 
+        // DEBUG: Log physics input for EVs
+        if (this.name === 'EV' && Math.random() < 0.01) { // 1% chance to log
+            console.log(`[${this.name}] Physics input: dt=${dt.toFixed(3)}, inputX=${inputX.toFixed(2)}, inputZ=${inputZ.toFixed(2)}`)
+        }
+
         // Apply physics-based movement
         this._applyPhysics(dt, inputX, inputZ)
+
+        // Check collisions with all entities
+        if (this.enableCollisions) {
+            CollisionSystem.checkCollisions(this.object, this, this._velocity, {
+                collisionRadius: this.collisionRadius,
+                applyPhysics: true,
+                dealDamage: false,  // Enemies don't deal collision damage to each other
+                cooldownMap: this._collisionCooldowns,
+                collideWith: ['BaseEnemyController', 'GoliathController', 'PlayerController', 'RobotTireController', 'SoldierController']
+            })
+        }
 
         return true
     }
