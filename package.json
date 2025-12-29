@@ -48,6 +48,9 @@
       },
       {
         "import": "./assets/HumanoidAnimationComponent.script.js"
+      },
+      {
+        "import": "./assets/EVSpawner.script.js"
       }
     ],
     "viewer": {},

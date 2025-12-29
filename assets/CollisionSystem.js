@@ -91,7 +91,7 @@ export class CollisionSystem {
             }),
             linearDamping: linearDamping,
             angularDamping: angularDamping,
-            fixedRotation: true, // Prevent tipping over
+            // fixedRotation: true, // Prevent tipping over
             collisionFilterGroup: this._getCollisionGroup(controller),
             collisionFilterMask: this._getCollisionMask(controller)
         })
@@ -254,7 +254,7 @@ export class CollisionSystem {
         // Sleeping bodies ignore forces in cannon-es
         body.wakeUp()
 
-        body.applyForce(new CANNON.Vec3(inputX * acceleration, 0, inputZ * acceleration))
+        body.applyForce(new CANNON.Vec3(inputX * acceleration * 0, 0, inputZ * acceleration * 0))
     }
 
     /**

@@ -40,23 +40,23 @@ class CrowdMember {
         this.pathIndex = 0
         this.lastPathUpdate = 0
         this.pathUpdateInterval = 500
-        
+
         // Health bar
         this.healthBarGroup = null
         this.healthBarFill = null
         this.healthBarBg = null
         this.displayedHealth = this.health
-        
+
         this._createHealthBar()
     }
-    
+
     _createHealthBar() {
         const barWidth = 0.8
         const barHeight = 0.15
-        
+
         this.healthBarGroup = new THREE.Group()
         this.healthBarGroup.name = 'CrowdMemberHealthBar'
-        
+
         // Background
         const bgGeometry = new THREE.PlaneGeometry(barWidth, barHeight)
         const bgMaterial = new THREE.MeshBasicMaterial({
@@ -67,7 +67,7 @@ class CrowdMember {
         })
         this.healthBarBg = new THREE.Mesh(bgGeometry, bgMaterial)
         this.healthBarGroup.add(this.healthBarBg)
-        
+
         // Fill
         const fillGeometry = new THREE.PlaneGeometry(barWidth - 0.04, barHeight - 0.04)
         const fillMaterial = new THREE.MeshBasicMaterial({
@@ -78,13 +78,13 @@ class CrowdMember {
         this.healthBarFill.position.z = 0.01
         this.healthBarGroup.add(this.healthBarFill)
     }
-    
+
     addHealthBarToScene(scene) {
         if (this.healthBarGroup && scene) {
             scene.add(this.healthBarGroup)
         }
     }
-    
+
     removeHealthBar(scene) {
         if (this.healthBarGroup && scene) {
             scene.remove(this.healthBarGroup)
@@ -94,31 +94,31 @@ class CrowdMember {
             this.healthBarFill?.material.dispose()
         }
     }
-    
+
     updateHealthBar(camera, dt) {
         if (!this.healthBarGroup || !this.healthBarFill || !this.mesh) return
-        
+
         // Position above mesh
         this.healthBarGroup.position.set(
             this.mesh.position.x,
             this.mesh.position.y + 2.0,
             this.mesh.position.z
         )
-        
+
         // Smooth health animation
         this.displayedHealth += (this.health - this.displayedHealth) * Math.min(1, 5 * dt)
-        
+
         // Update fill
         const healthPercent = Math.max(0, this.displayedHealth / this.maxHealth)
         this.healthBarFill.scale.x = healthPercent
         this.healthBarFill.position.x = -(0.76 / 2) * (1 - healthPercent)
-        
+
         // Billboard
         if (camera) {
             this.healthBarGroup.lookAt(camera.position)
         }
     }
-    
+
     takeDamage(amount, attacker = null) {
         if (!this.isAlive) return
         this.health -= amount

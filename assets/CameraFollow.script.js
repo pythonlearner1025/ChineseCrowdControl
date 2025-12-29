@@ -5,13 +5,13 @@ import {Object3DComponent} from 'threepipe'
  * with three zoom levels cyclable with Z key
  */
 export class CameraFollow extends Object3DComponent {
-    static StateProperties = ['currentZoomLevel', 'smoothing', 'offsetX', 'Y', 'offsetZ']
+    static StateProperties = ['currentZoomLevel', 'smoothing', 'offsetX', 'offsetY', 'offsetZ']
     static ComponentType = 'CameraFollow'
 
     target = null // Automatically found by name "Player"
     currentZoomLevel = 1 // 0, 1, or 2
     smoothing = 0.1 // Camera follow smoothness (0-1, higher = faster)
-    
+
     // Additional offset from calculated position
     offsetX = 0
     offsetY = 0
@@ -47,7 +47,7 @@ export class CameraFollow extends Object3DComponent {
     update(params) {
         try {
             if (!this.object) return false
-            
+
             // Find the Player object if we don't have it yet
             if (!this.target) {
                 this.target = this.ctx.viewer.scene.getObjectByName('player')
@@ -57,7 +57,7 @@ export class CameraFollow extends Object3DComponent {
             }
 
             const zoom = this.zoomLevels[this.currentZoomLevel]
-            
+
             // Calculate isometric camera position
             // Position camera aligned with world axes
             const targetX = this.target.position.x
@@ -70,7 +70,7 @@ export class CameraFollow extends Object3DComponent {
             const baseOffsetZ = zoom.distance
             const baseOffsetY = zoom.height
 
-            //console.log('[CameraFollow] Offset:', this.offsetX, this.offsetY, this.offsetZ)   
+            //console.log('[CameraFollow] Offset:', this.offsetX, this.offsetY, this.offsetZ)
 
             // Desired camera position (with custom offset)
             const desiredX = targetX + baseOffsetX + this.offsetX

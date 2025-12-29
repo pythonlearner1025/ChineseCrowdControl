@@ -52,7 +52,7 @@ export class RobotTireController extends Object3DComponent {
     _raycaster = null
     _mouse = null
     _cachedEnemies = []   // cached list of enemies for targeting
-    
+
     // Collision damage settings
     collisionRadius = 1.2         // how close entities must be to deal collision damage
     collisionDamageCooldown = 300 // ms between collision damage from same source
@@ -828,11 +828,11 @@ export class RobotTireController extends Object3DComponent {
             this.object.visible = true
         }
     }
-    
+
     ToggleRunning = () => {
         this.running = !this.running
     }
-    
+
     uiConfig = {
         type: 'folder',
         label: 'Robot Tire Controller',
