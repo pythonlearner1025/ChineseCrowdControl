@@ -150,8 +150,17 @@ export class EVSpawner extends Object3DComponent {
                 controller.mass = this._evMass
                 controller.friction = this._evFriction
 
-                // CRITICAL: Set collision radius to match vehicle size (3×4 box)
-                controller.collisionRadius = 2.5  // Larger than default 1.2 to cover the EV body
+                // CRITICAL: Enable cannon-es physics for realistic mass-based collisions!
+                controller.useCannonPhysics = true
+
+                // CRITICAL: EV uses BOX collision shape (not sphere!)
+                // This matches the visual geometry (3×1.5×4 box)
+                controller.useBoxCollision = true
+                controller.boxSize = {width: 3, height: 1.5, depth: 4}
+
+                // NOTE: collisionRadius is ignored when useBoxCollision = true
+                // But keep it for backward compatibility
+                controller.collisionRadius = 2.5
 
                 // Adjust health bar offset for vehicle size
                 controller._healthBarOffset = 2.5

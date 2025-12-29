@@ -1,5 +1,6 @@
 import {Object3DComponent} from 'threepipe'
 import * as CANNON from 'cannon-es'
+import {CollisionSystem} from './CollisionSystem.js'
 
 /**
  * PhysicsWorldManager - Singleton to manage global cannon.js physics world
@@ -24,9 +25,22 @@ class PhysicsWorldManager {
         this.world.sleepTimeLimit = 1
 
         this.ragdolls = [] // Track all active ragdolls
+        this.entities = [] // Track all entity physics bodies
         this.groundsInitialized = false
+        this.collisionDamageEnabled = false
 
         //console.log('[PhysicsWorldManager] Initialized with gravity:', this.world.gravity)
+    }
+
+    /**
+     * Enable collision damage system
+     * Call this once after initialization
+     */
+    enableCollisionDamage(cooldownMs = 300) {
+        if (this.collisionDamageEnabled) return
+        CollisionSystem.setupCollisionDamage(this.world, cooldownMs)
+        this.collisionDamageEnabled = true
+        console.log('[PhysicsWorldManager] Collision damage enabled')
     }
 
     initializeGroundPlanes(scene) {
@@ -117,6 +131,9 @@ export class PhysicsWorldController extends Object3DComponent {
             physicsWorldManager.initializeGroundPlanes(scene)
         }
 
+        // Enable collision damage system
+        physicsWorldManager.enableCollisionDamage(300)
+
         //console.log('[PhysicsWorldController] Started')
     }
 
@@ -128,8 +145,11 @@ export class PhysicsWorldController extends Object3DComponent {
     update({time, deltaTime}) {
         if (!this.enabled || !physicsWorldManager) return false
 
-        // Step the physics world
+        // Step the physics world (simulate ALL physics for this frame)
         physicsWorldManager.step(deltaTime)
+
+        // NOTE: Individual entities sync themselves in their update() methods
+        // They read results from the previous frame's step, which is standard in physics engines
 
         return true // Mark viewer dirty
     }

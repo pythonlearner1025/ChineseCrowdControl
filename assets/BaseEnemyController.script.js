@@ -1,6 +1,7 @@
 import {Object3DComponent, EntityComponentPlugin} from 'threepipe'
 import * as THREE from 'three'
 import {CollisionSystem} from './CollisionSystem.js'
+import {getPhysicsWorldManager} from './PhysicsWorldController.script.js'
 
 /**
  * BaseEnemyController - Base class for all enemy types with A* pathfinding
@@ -34,6 +35,11 @@ export class BaseEnemyController extends Object3DComponent {
     collisionRadius = 1.2  // Reduced from 1.5 to allow easier passage
     enableCollisions = true
 
+    // Cannon-es physics integration (optional, for heavy vehicles like EVs)
+    useCannonPhysics = false  // If true, uses cannon-es for realistic physics
+    useBoxCollision = false   // If true, uses box shape instead of sphere
+    boxSize = null            // {width, height, depth} for box collision
+
     // Internal state
     _player = null
     _cityHall = null          // cache City Hall reference
@@ -48,6 +54,8 @@ export class BaseEnemyController extends Object3DComponent {
     // Physics state
     _velocity = null
     _displayedHealth = 100
+    _physicsBody = null       // Cannon-es body (if useCannonPhysics = true)
+    _physicsWorld = null      // Cannon-es world reference
 
     // Collision state
     _collisionCooldowns = null
@@ -81,11 +89,53 @@ export class BaseEnemyController extends Object3DComponent {
         // Initialize collision tracking
         this._collisionCooldowns = new Map()
 
+        // Create cannon-es physics body if enabled
+        if (this.useCannonPhysics) {
+            this._initializeCannonPhysics()
+        }
+
         // Create health bar
         this._createHealthBar()
 
         // Setup humanoid animation
         this._setupAnimation()
+    }
+
+    _initializeCannonPhysics() {
+        const physicsManager = getPhysicsWorldManager()
+        if (!physicsManager) {
+            console.error('[BaseEnemyController] No PhysicsWorldManager found!')
+            return
+        }
+        this._physicsWorld = physicsManager.world
+
+        // Determine collision shape
+        const shapeType = this.useBoxCollision ? 'box' : 'sphere'
+        let shapeSize
+        if (this.useBoxCollision && this.boxSize) {
+            shapeSize = this.boxSize
+        } else {
+            shapeSize = { radius: this.collisionRadius }
+        }
+
+        // Create physics body
+        // EVs should be dynamic (fully physics-controlled) for realistic pushing
+        this._physicsBody = CollisionSystem.getOrCreateBody(
+            this.object,
+            this,
+            this._physicsWorld,
+            {
+                bodyType: 'dynamic',  // Let cannon-es control position based on forces/collisions
+                shapeType: shapeType,
+                shapeSize: shapeSize,
+                mass: this.mass,
+                friction: 0.4,
+                restitution: 0.3,
+                linearDamping: 0.3
+            }
+        )
+
+        console.log(`[BaseEnemyController] Created cannon-es body for ${this.name}: type=${shapeType}, mass=${this.mass}`)
     }
 
     stop() {
@@ -95,6 +145,13 @@ export class BaseEnemyController extends Object3DComponent {
             //console.log('[BaseEnemyController] Cleaning up animation component on stop')
             this._animComp.cleanup()
             this._animComp = null
+        }
+
+        // Clean up cannon-es physics body
+        if (this._physicsBody && this._physicsWorld) {
+            CollisionSystem.removeBody(this.object, this._physicsWorld)
+            this._physicsBody = null
+            this._physicsWorld = null
         }
 
         if (super.stop) super.stop()
@@ -666,7 +723,14 @@ export class BaseEnemyController extends Object3DComponent {
 
         if (!this.enabled || !this.isAlive) {
             // Still apply friction when disabled/dead
-            this._applyPhysics(dt, 0, 0)
+            if (this._physicsBody) {
+                // Cannon-es mode: sync physics (friction/damping handled by cannon-es)
+                CollisionSystem.syncObjectToBody(this.object, this, this._physicsBody)
+                CollisionSystem.syncBodyToObject(this.object, this, this._physicsBody)
+            } else {
+                // Legacy mode: custom friction
+                this._applyPhysics(dt, 0, 0)
+            }
             return this._velocity && this._velocity.lengthSq() > 0.001
         }
 
@@ -675,7 +739,14 @@ export class BaseEnemyController extends Object3DComponent {
 
         if (!this._currentTarget) {
             // No target found (no City Hall, no entities)
-            this._applyPhysics(dt, 0, 0)
+            if (this._physicsBody) {
+                // Cannon-es mode: no movement force applied (just friction/damping)
+                CollisionSystem.syncObjectToBody(this.object, this, this._physicsBody)
+                CollisionSystem.syncBodyToObject(this.object, this, this._physicsBody)
+            } else {
+                // Legacy mode: custom friction
+                this._applyPhysics(dt, 0, 0)
+            }
             return false
         }
 
@@ -689,7 +760,16 @@ export class BaseEnemyController extends Object3DComponent {
         // Within attack range - attack!
         if (distToTarget <= this.attackRange) {
             this._attack(this._currentTarget)
-            this._applyPhysics(dt, 0, 0) // stop moving when attacking
+
+            // Stop moving when attacking
+            if (this._physicsBody) {
+                // Cannon-es mode: no movement force (friction stops entity)
+                CollisionSystem.syncObjectToBody(this.object, this, this._physicsBody)
+                CollisionSystem.syncBodyToObject(this.object, this, this._physicsBody)
+            } else {
+                // Legacy mode: custom friction
+                this._applyPhysics(dt, 0, 0)
+            }
             return true
         }
 
@@ -726,18 +806,35 @@ export class BaseEnemyController extends Object3DComponent {
             console.log(`[${this.name}] Physics input: dt=${dt.toFixed(3)}, inputX=${inputX.toFixed(2)}, inputZ=${inputZ.toFixed(2)}`)
         }
 
-        // Apply physics-based movement
-        this._applyPhysics(dt, inputX, inputZ)
+        // === CANNON-ES PHYSICS MODE ===
+        if (this._physicsBody) {
+            // Sync BEFORE physics step (for dynamic bodies, this does nothing except apply external forces)
+            CollisionSystem.syncObjectToBody(this.object, this, this._physicsBody)
 
-        // Check collisions with all entities
-        if (this.enableCollisions) {
-            CollisionSystem.checkCollisions(this.object, this, this._velocity, {
-                collisionRadius: this.collisionRadius,
-                applyPhysics: true,
-                dealDamage: false,  // Enemies don't deal collision damage to each other
-                cooldownMap: this._collisionCooldowns,
-                collideWith: ['BaseEnemyController', 'GoliathController', 'PlayerController', 'RobotTireController', 'SoldierController']
-            })
+            // Apply movement force via cannon-es
+            const acceleration = this.speed * 10  // Scale speed to force
+            CollisionSystem.applyMovementForce(this._physicsBody, inputX, inputZ, acceleration)
+
+            // Sync AFTER applying force (reads results from previous frame's physics step)
+            CollisionSystem.syncBodyToObject(this.object, this, this._physicsBody)
+
+            // Cannon-es handles collisions automatically - no need for manual checks!
+        }
+        // === LEGACY PHYSICS MODE ===
+        else {
+            // Apply custom physics-based movement
+            this._applyPhysics(dt, inputX, inputZ)
+
+            // Check collisions with all entities (legacy method)
+            if (this.enableCollisions) {
+                CollisionSystem.checkCollisions(this.object, this, this._velocity, {
+                    collisionRadius: this.collisionRadius,
+                    applyPhysics: true,
+                    dealDamage: false,  // Enemies don't deal collision damage to each other
+                    cooldownMap: this._collisionCooldowns,
+                    collideWith: ['BaseEnemyController', 'GoliathController', 'PlayerController', 'RobotTireController', 'SoldierController']
+                })
+            }
         }
 
         return true

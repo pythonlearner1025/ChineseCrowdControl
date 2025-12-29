@@ -1,6 +1,7 @@
 import {Object3DComponent, EntityComponentPlugin} from 'threepipe'
 import * as THREE from 'three'
 import {CollisionSystem} from './CollisionSystem.js'
+import {getPhysicsWorldManager} from './PhysicsWorldController.script.js'
 
 /**
  * WASD movement controller for robot tire units with combat attributes
@@ -38,6 +39,10 @@ export class RobotTireController extends Object3DComponent {
     // Physics attributes
     mass = 0.5            // low mass = snappy direction changes
     friction = 20         // high friction = sharp turns, minimal drift
+
+    // Cannon-es physics integration
+    _physicsBody = null   // CANNON.Body
+    _physicsWorld = null  // Cannon-es world reference
 
     // Internal combat state
     _isAlive = true
@@ -87,12 +92,42 @@ export class RobotTireController extends Object3DComponent {
         // Initialize physics
         this._velocity = new THREE.Vector3(0, 0, 0)
         this._displayedHealth = this.health
-        
+
         // Initialize collision cooldowns
         this._collisionCooldowns = new Map()
 
         // Create health bar
         this._createHealthBar()
+
+        // Create cannon-es physics body
+        this._initializeCannonPhysics()
+    }
+
+    _initializeCannonPhysics() {
+        const physicsManager = getPhysicsWorldManager()
+        if (!physicsManager) {
+            console.error('[PlayerController] No PhysicsWorldManager found!')
+            return
+        }
+        this._physicsWorld = physicsManager.world
+
+        // Create dynamic physics body for player
+        this._physicsBody = CollisionSystem.getOrCreateBody(
+            this.object,
+            this,
+            this._physicsWorld,
+            {
+                bodyType: 'dynamic',  // Fully physics-controlled
+                shapeType: 'sphere',
+                shapeSize: { radius: this.collisionRadius * 0.5 },
+                mass: this.mass,
+                friction: 0.4,
+                restitution: 0.3,
+                linearDamping: 0.3
+            }
+        )
+
+        console.log('[PlayerController] Cannon-es physics body created with mass:', this.mass)
     }
 
     stop() {
@@ -106,6 +141,12 @@ export class RobotTireController extends Object3DComponent {
 
         // Cleanup health bar
         this._removeHealthBar()
+
+        // Cleanup cannon-es physics body
+        if (this._physicsBody && this._physicsWorld) {
+            CollisionSystem.removeBody(this.object, this._physicsWorld)
+            this._physicsBody = null
+        }
     }
 
     // ==================== HEALTH BAR ====================
@@ -563,13 +604,12 @@ export class RobotTireController extends Object3DComponent {
             }
 
             if (!this.running || !this.isAlive) {
-                // Still apply friction when not running
-                this._applyPhysics(dt, 0, 0)
-                return this._projectiles.length > 0 || this._velocity.lengthSq() > 0.001
+                // Still sync physics when not running (apply friction)
+                if (this._physicsBody) {
+                    CollisionSystem.syncObjectToBody(this.object, this, this._physicsBody)
+                }
+                return this._projectiles.length > 0 || (this._velocity && this._velocity.lengthSq() > 0.001)
             }
-
-            // Check for collision damage from entities
-            this._checkEntityCollisions()
 
             // Auto-fire at enemies in range
             this._tryAutoFire()
@@ -594,8 +634,23 @@ export class RobotTireController extends Object3DComponent {
                 inputZ /= inputMag
             }
 
-            // Apply physics-based movement
-            this._applyPhysics(dt, inputX, inputZ)
+            // === CANNON-ES PHYSICS MODE ===
+            if (this._physicsBody) {
+                // Sync TO body (prepare input)
+                CollisionSystem.syncObjectToBody(this.object, this, this._physicsBody)
+
+                // Apply movement force (cannon-es will integrate this)
+                const acceleration = this.speed * 10
+                CollisionSystem.applyMovementForce(this._physicsBody, inputX, inputZ, acceleration)
+
+                // Sync FROM body (read physics results from previous frame)
+                // Note: This reads results from the last world.step(), which is fine
+                CollisionSystem.syncBodyToObject(this.object, this, this._physicsBody)
+            } else {
+                // Fallback: legacy physics (shouldn't happen)
+                console.warn('[PlayerController] No physics body! Using legacy physics.')
+                this._applyPhysics(dt, inputX, inputZ)
+            }
 
             return true
         } catch (error) {
@@ -644,50 +699,8 @@ export class RobotTireController extends Object3DComponent {
     }
 
     // ==================== COLLISION DAMAGE ====================
-
-    _checkEntityCollisions() {
-        if (!this.isAlive || !this.object) return
-
-        const viewer = this.ctx?.viewer
-        if (!viewer) return
-
-        // Use CollisionSystem for physics-based collisions with all entities
-        CollisionSystem.checkCollisions(this.object, this, this._velocity, {
-            collisionRadius: this.collisionRadius,
-            applyPhysics: true,          // Apply momentum transfer
-            dealDamage: false,           // Player takes damage from enemies, not dealt by collision
-            cooldownMap: this._collisionCooldowns,
-            cooldownMs: this.collisionDamageCooldown,
-            collideWith: ['BaseEnemyController', 'GoliathController', 'SoldierController']
-        })
-
-        // Still need to handle crowd members separately (not in CollisionSystem yet)
-        const myPos = this.object.position
-        const now = Date.now()
-
-        viewer.scene.traverse((obj) => {
-            const crowdController = EntityComponentPlugin.GetComponent(obj, 'CrowdController')
-            if (crowdController && crowdController._members) {
-                for (const member of crowdController._members) {
-                    if (!member || !member.isAlive || !member.mesh) continue
-                    this._handleCrowdMemberCollision(member, myPos, now)
-                }
-            }
-        })
-    }
-
-    _handleCrowdMemberCollision(member, myPos, now) {
-        const dist = myPos.distanceTo(member.mesh.position)
-
-        if (dist < this.collisionRadius) {
-            // Check cooldown
-            const lastHit = this._collisionCooldowns.get(member) || 0
-            if (now - lastHit < this.collisionDamageCooldown) return
-
-            this._collisionCooldowns.set(member, now)
-            this.takeDamage(member.damage || 5, member)
-        }
-    }
+    // NOTE: Collision damage is now handled automatically by CollisionSystem via cannon-es events
+    // No manual collision checks needed!
 
     // ==================== COMBAT ====================
 
