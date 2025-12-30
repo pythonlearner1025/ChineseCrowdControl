@@ -247,14 +247,21 @@ export class CollisionSystem {
     /**
      * Apply movement force to body (cannon-es will integrate this)
      */
-    static applyMovementForce(body, inputX, inputZ, acceleration = 100) {
+    static applyMovementForce(body, inputX, inputZ, acceleration = 100, player = false) {
         if (!body) return
 
         // CRITICAL: Wake up body before applying forces!
         // Sleeping bodies ignore forces in cannon-es
         body.wakeUp()
 
-        body.applyForce(new CANNON.Vec3(inputX * acceleration, 0, inputZ * acceleration))
+        const acc = new CANNON.Vec3(inputX * acceleration, 0, inputZ * acceleration)
+
+        if(!player)
+            body.applyForce(acc)
+        else {
+            body.velocity = acc
+        }
+
     }
 
     /**

@@ -291,7 +291,7 @@ export class PlayerController extends Object3DComponent {
 
                 // Apply movement force (cannon-es will integrate this)
                 const acceleration = this.speed
-                CollisionSystem.applyMovementForce(this._physicsBody, inputX, inputZ, acceleration)
+                CollisionSystem.applyMovementForce(this._physicsBody, inputX, inputZ, acceleration, true)
 
                 // Sync FROM body (read physics results from previous frame)
                 // Note: This reads results from the last world.step(), which is fine

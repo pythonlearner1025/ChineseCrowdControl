@@ -468,14 +468,11 @@ export class EnemySystemManager extends Object3DComponent {
     _findPlayer() {
         const scene = this.ctx?.viewer?.scene
         if (!scene) return
-
-        scene.traverse((obj) => {
-            if (this._player) return
-            const controller = this.ctx.ecp.getComponentOfType('PlayerController')
-            if (controller) {
-                this._player = obj
-            }
-        })
+        if (this._player) return
+        const controller = this.ctx.ecp.getComponentOfType('PlayerController')
+        if (controller) {
+            this._player = controller.object
+        }
     }
 
     _findCityHall() {

@@ -71,17 +71,17 @@ export class RobotTireController extends Object3DComponent {
         //console.log('start', this.baseSpeed)
         if (super.start) super.start()
         //console.log('[RobotTireController] Soldier spawned')
-        
+
         this._velocity = new THREE.Vector3(0, 0, 0)
         this._displayedHealth = this.health
         this._impactCooldowns = new Map()
-        
+
         this._createSelectionRing()
         this._createHealthBar()
-        
+
         // Register with manager
         this._registerWithManager()
-        
+
         // Trigger update loop
         this.ctx?.viewer?.setDirty()
     }
@@ -97,7 +97,7 @@ export class RobotTireController extends Object3DComponent {
     _registerWithManager() {
         const scene = this.ctx?.viewer?.scene
         if (!scene) return
-        
+
         scene.traverse((obj) => {
             const manager = EntityComponentPlugin.GetComponent(obj, 'SoldierSelectionManager')
             if (manager) {
@@ -109,7 +109,7 @@ export class RobotTireController extends Object3DComponent {
     _unregisterFromManager() {
         const scene = this.ctx?.viewer?.scene
         if (!scene) return
-        
+
         scene.traverse((obj) => {
             const manager = EntityComponentPlugin.GetComponent(obj, 'SoldierSelectionManager')
             if (manager) {
@@ -157,7 +157,7 @@ export class RobotTireController extends Object3DComponent {
         this._selectionRing.rotation.x = -Math.PI / 2 // lay flat
         this._selectionRing.position.y = 0.05 // slightly above ground
         this._selectionRing.visible = false
-        
+
         this.object.add(this._selectionRing)
     }
 
@@ -172,9 +172,9 @@ export class RobotTireController extends Object3DComponent {
 
     _updateSelectionVisual() {
         if (!this._selectionRing) return
-        
+
         this._selectionRing.visible = this._isSelected
-        
+
         // Color based on group
         if (this._groupId !== null) {
             const colors = [0x00ff00, 0xff6600, 0x0066ff, 0xff00ff, 0xffff00]
@@ -493,16 +493,16 @@ export class RobotTireController extends Object3DComponent {
         const currentSpeed = this.getCurrentSpeed()
 
         // Use CollisionSystem for physics-based collisions
-        CollisionSystem.checkCollisions(this.object, this, this._velocity, {
-            collisionRadius: 1.5,
-            applyPhysics: true,                           // Apply momentum transfer
-            dealDamage: true,                             // Soldiers deal damage on collision
-            baseDamage: currentSpeed > 0.01 ? this.damage : 0,  // Base damage only if moving
-            collisionDamageScale: this.impactDamageScale, // Speed-scaled damage
-            cooldownMap: this._impactCooldowns,
-            cooldownMs: this._impactCooldownMs,
-            collideWith: ['BaseEnemyController', 'PlayerController', 'RobotTireController']
-        })
+        // CollisionSystem.checkCollisions(this.object, this, this._velocity, {
+        //     collisionRadius: 1.5,
+        //     applyPhysics: true,                           // Apply momentum transfer
+        //     dealDamage: true,                             // Soldiers deal damage on collision
+        //     baseDamage: currentSpeed > 0.01 ? this.damage : 0,  // Base damage only if moving
+        //     collisionDamageScale: this.impactDamageScale, // Speed-scaled damage
+        //     cooldownMap: this._impactCooldowns,
+        //     cooldownMs: this._impactCooldownMs,
+        //     collideWith: ['Crowd', 'PlayerController', 'RobotTireController']
+        // })
 
         // Visual feedback for high-speed collisions
         if (currentSpeed > 0.01) {
