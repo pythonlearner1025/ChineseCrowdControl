@@ -16,6 +16,10 @@ class CrowdMember {
         this.controller = controller
         this.animationComponent = null  // For procedural humanoid animation
 
+        // Humanoid body parts (created by CrowdMember, not HumanoidAnimationComponent)
+        this._humanoidBodyParts = null
+        this._humanoidRootObject = null
+
         // Stats
         this.health = 50
         this.maxHealth = 50
@@ -119,6 +123,9 @@ class CrowdMember {
         }
     }
 
+    // Note: Body part creation/cleanup moved to CrowdController
+    // Data classes should not have create/destroy logic
+
     takeDamage(amount, attacker = null) {
         if (!this.isAlive) return
         this.health -= amount
@@ -132,10 +139,14 @@ class CrowdMember {
             // Hide mesh first (ensure death happens)
             this.mesh.visible = false
 
-            // Clean up animation component (CRITICAL - removes the 10 frozen body parts!)
+            // Clean up humanoid body parts (CRITICAL - removes the 10 frozen body parts!)
+            // Manager is responsible for cleanup, not data class
+            if (scene && this.controller) {
+                this.controller._cleanupHumanoidBodyParts(this, scene)
+            }
+
+            // Clean up animation component reference
             if (this.animationComponent) {
-                //console.log('[CrowdMember] Cleaning up animation component')
-                this.animationComponent.cleanup()
                 this.animationComponent = null
             }
 
@@ -232,7 +243,7 @@ export class CrowdController extends Object3DComponent {
         this._spawnCrowd()
         this._initialized = true
 
-        console.log(`[CrowdController] Started with ${this._members.length} members using cannon-es physics`)
+        //console.log(`[CrowdController] Started with ${this._members.length} members using cannon-es physics`)
     }
 
     stop() {
@@ -246,6 +257,10 @@ export class CrowdController extends Object3DComponent {
 
         for (const member of this._members) {
             if (member) {
+                // Clean up humanoid body parts (Manager cleans up, not data class)
+                this._cleanupHumanoidBodyParts(member, scene)
+
+                // Remove health bar
                 member.removeHealthBar(scene)
 
                 // Remove cannon-es physics body
@@ -262,6 +277,94 @@ export class CrowdController extends Object3DComponent {
             }
         }
         this._members = []
+    }
+
+    // ==================== HUMANOID BODY PARTS (Manager-level) ====================
+
+    _createHumanoidBodyParts(member, scene, scale, color) {
+        if (!scene) {
+            console.error('[CrowdController] No scene found for body parts')
+            return {bodyParts: {}, rootObject: null}
+        }
+
+        // Create root object to hold all body parts
+        const rootObject = new THREE.Group()
+        rootObject.name = 'HumanoidRoot_' + member.mesh.name
+        scene.add(rootObject)
+
+        // Material for all body parts
+        const material = new THREE.MeshStandardMaterial({
+            color: color,
+            roughness: 0.7,
+            metalness: 0.2
+        })
+
+        // Body part configurations
+        const bodyConfigs = [
+            {name: 'head', shape: 'sphere', radius: 0.25 * scale, offset: new THREE.Vector3(0, 1.5 * scale, 0)},
+            {name: 'torso', shape: 'box', size: new THREE.Vector3(0.5 * scale, 0.7 * scale, 0.3 * scale), offset: new THREE.Vector3(0, 0.9 * scale, 0)},
+            {name: 'upperArmLeft', shape: 'capsule', radius: 0.1 * scale, height: 0.5 * scale, offset: new THREE.Vector3(0.4 * scale, 1.2 * scale, 0), jointPoint: new THREE.Vector3(0.25 * scale, 1.3 * scale, 0)},
+            {name: 'lowerArmLeft', shape: 'capsule', radius: 0.08 * scale, height: 0.5 * scale, offset: new THREE.Vector3(0.65 * scale, 1.2 * scale, 0), jointPoint: new THREE.Vector3(0.4 * scale, 1.2 * scale, 0)},
+            {name: 'upperArmRight', shape: 'capsule', radius: 0.1 * scale, height: 0.5 * scale, offset: new THREE.Vector3(-0.4 * scale, 1.2 * scale, 0), jointPoint: new THREE.Vector3(-0.25 * scale, 1.3 * scale, 0)},
+            {name: 'lowerArmRight', shape: 'capsule', radius: 0.08 * scale, height: 0.5 * scale, offset: new THREE.Vector3(-0.65 * scale, 1.2 * scale, 0), jointPoint: new THREE.Vector3(-0.4 * scale, 1.2 * scale, 0)},
+            {name: 'upperLegLeft', shape: 'capsule', radius: 0.12 * scale, height: 0.6 * scale, offset: new THREE.Vector3(0.15 * scale, 0.3 * scale, 0), jointPoint: new THREE.Vector3(0.15 * scale, 0.6 * scale, 0)},
+            {name: 'lowerLegLeft', shape: 'capsule', radius: 0.1 * scale, height: 0.6 * scale, offset: new THREE.Vector3(0.15 * scale, -0.3 * scale, 0), jointPoint: new THREE.Vector3(0.15 * scale, 0.0, 0)},
+            {name: 'upperLegRight', shape: 'capsule', radius: 0.12 * scale, height: 0.6 * scale, offset: new THREE.Vector3(-0.15 * scale, 0.3 * scale, 0), jointPoint: new THREE.Vector3(-0.15 * scale, 0.6 * scale, 0)},
+            {name: 'lowerLegRight', shape: 'capsule', radius: 0.1 * scale, height: 0.6 * scale, offset: new THREE.Vector3(-0.15 * scale, -0.3 * scale, 0), jointPoint: new THREE.Vector3(-0.15 * scale, 0.0, 0)}
+        ]
+
+        const bodyParts = {}
+
+        // Create meshes for each body part
+        for (const config of bodyConfigs) {
+            let geometry
+
+            if (config.shape === 'sphere') {
+                geometry = new THREE.SphereGeometry(config.radius, 16, 16)
+            } else if (config.shape === 'box') {
+                geometry = new THREE.BoxGeometry(config.size.x, config.size.y, config.size.z)
+            } else if (config.shape === 'capsule') {
+                geometry = new THREE.CapsuleGeometry(config.radius, config.height, 8, 16)
+            }
+
+            const mesh = new THREE.Mesh(geometry, material.clone())
+            mesh.position.copy(config.offset)
+            mesh.castShadow = true
+            mesh.receiveShadow = true
+            mesh.name = config.name
+
+            rootObject.add(mesh)
+
+            bodyParts[config.name] = {
+                mesh: mesh,
+                baseOffset: config.offset.clone(),
+                jointPoint: config.jointPoint ? config.jointPoint.clone() : config.offset.clone(),
+                prevPosition: null
+            }
+        }
+
+        member._humanoidBodyParts = bodyParts
+        member._humanoidRootObject = rootObject
+
+        return {bodyParts, rootObject}
+    }
+
+    _cleanupHumanoidBodyParts(member, scene) {
+        if (!scene || !member._humanoidRootObject) return
+
+        // Dispose all body part meshes
+        for (const part of Object.values(member._humanoidBodyParts || {})) {
+            if (part.mesh) {
+                part.mesh.geometry?.dispose()
+                part.mesh.material?.dispose()
+            }
+        }
+
+        // Remove root object from scene
+        scene.remove(member._humanoidRootObject)
+
+        member._humanoidBodyParts = null
+        member._humanoidRootObject = null
     }
 
     _findPlayer() {
@@ -342,9 +445,9 @@ export class CrowdController extends Object3DComponent {
                     shapeType: 'sphere',
                     shapeSize: { radius: member.collisionRadius },
                     mass: member.mass,
-                    friction: 0.4,
+                    friction: 0.8,
                     restitution: 0.3,
-                    linearDamping: 0.3
+                    linearDamping: 0.8
                 }
             )
 
@@ -356,13 +459,24 @@ export class CrowdController extends Object3DComponent {
         this.ctx.ecp.addComponent(mesh, 'HumanoidAnimationComponent')
         const animComp = EntityComponentPlugin.GetComponent(mesh, 'HumanoidAnimationComponent')
         if (animComp) {
-            animComp.scale = 0.8
-            animComp.color = 0xff8844
+            const scale = 0.8
+            const color = 0xff8844
+
+            animComp.scale = scale
+            animComp.color = color
             animComp.baseSpeed = this.memberSpeed
             animComp.walkCycleSpeed = 8
             animComp.legSwingAngle = Math.PI / 6
             animComp.armSwingAngle = Math.PI / 9
             animComp.torsoBobbingHeight = 0.08
+
+            // Create body parts and pass them to animation component (Manager creates, not data class)
+            const scene = this.ctx?.viewer?.scene
+            if (scene) {
+                const {bodyParts, rootObject} = this._createHumanoidBodyParts(member, scene, scale, color)
+                animComp.setBodyParts(bodyParts, rootObject)
+            }
+
             member.animationComponent = animComp
         }
 
@@ -601,7 +715,7 @@ export class CrowdController extends Object3DComponent {
             // Already normalized from pathfinding, no need to normalize again
 
             // Apply movement force via cannon-es
-            const acceleration = member.speed * 10
+            const acceleration = member.speed
             CollisionSystem.applyMovementForce(member._physicsBody, inputX, inputZ, acceleration)
 
             // Sync FROM body (read physics results from previous frame)
@@ -640,7 +754,7 @@ export class CrowdController extends Object3DComponent {
         if (this._debugTimer > 3000) {
             this._debugTimer = 0
             const alive = this._members.filter(m => m.isAlive).length
-            console.log(`[CrowdController] alive=${alive}/${this._members.length}, player=${this._player ? this._player.name : 'null'}`)
+            //console.log(`[CrowdController] alive=${alive}/${this._members.length}, player=${this._player ? this._player.name : 'null'}`)
         }
 
         // Update each member

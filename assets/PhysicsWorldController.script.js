@@ -40,7 +40,7 @@ class PhysicsWorldManager {
         if (this.collisionDamageEnabled) return
         CollisionSystem.setupCollisionDamage(this.world, cooldownMs)
         this.collisionDamageEnabled = true
-        console.log('[PhysicsWorldManager] Collision damage enabled')
+        //console.log('[PhysicsWorldManager] Collision damage enabled')
     }
 
     initializeGroundPlanes(scene) {

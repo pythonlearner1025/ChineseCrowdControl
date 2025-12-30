@@ -36,20 +36,19 @@ export class HumanoidAnimationComponent extends Object3DComponent {
     start() {
         if (super.start) super.start()
 
-        // Create 10 body part meshes
-        this._createBodyParts()
-
         // Hide original parent mesh (capsule)
         if (this.object) {
             this.object.visible = false
         }
 
-        //console.log('[HumanoidAnimationComponent] Started with scale:', this.scale, 'color:', this.color.toString(16))
+        //console.log('[HumanoidAnimationComponent] Started - waiting for body parts from parent controller')
     }
 
     stop() {
         if (super.stop) super.stop()
-        this.cleanup()
+        // Note: Body parts are NOT cleaned up here
+        // Cleanup is handled by the parent controller (BaseEnemyController/CrowdController)
+        this._clearReferences()
     }
 
     update({time, deltaTime}) {
@@ -86,141 +85,15 @@ export class HumanoidAnimationComponent extends Object3DComponent {
         return true
     }
 
-    _createBodyParts() {
-        const scene = this.ctx?.viewer?.scene
-        if (!scene) {
-            console.error('[HumanoidAnimationComponent] No scene found')
-            return
-        }
-
-        // Create root object to hold all body parts
-        this._rootObject = new THREE.Group()
-        this._rootObject.name = 'HumanoidRoot'
-        scene.add(this._rootObject)
-
-        // Material for all body parts
-        const material = new THREE.MeshStandardMaterial({
-            color: this.color,
-            roughness: 0.7,
-            metalness: 0.2
-        })
-
-        // Body part configurations matching RagdollComponent
-        const bodyConfigs = [
-            // Head
-            {
-                name: 'head',
-                shape: 'sphere',
-                radius: 0.25 * this.scale,
-                offset: new THREE.Vector3(0, 1.5 * this.scale, 0)
-            },
-            // Torso
-            {
-                name: 'torso',
-                shape: 'box',
-                size: new THREE.Vector3(0.5 * this.scale, 0.7 * this.scale, 0.3 * this.scale),
-                offset: new THREE.Vector3(0, 0.9 * this.scale, 0)
-            },
-            // Left arm
-            {
-                name: 'upperArmLeft',
-                shape: 'capsule',
-                radius: 0.1 * this.scale,
-                height: 0.5 * this.scale,
-                offset: new THREE.Vector3(0.4 * this.scale, 1.2 * this.scale, 0),
-                jointPoint: new THREE.Vector3(0.25 * this.scale, 1.3 * this.scale, 0) // Shoulder
-            },
-            {
-                name: 'lowerArmLeft',
-                shape: 'capsule',
-                radius: 0.08 * this.scale,
-                height: 0.5 * this.scale,
-                offset: new THREE.Vector3(0.65 * this.scale, 1.2 * this.scale, 0),
-                jointPoint: new THREE.Vector3(0.4 * this.scale, 1.2 * this.scale, 0) // Elbow
-            },
-            // Right arm
-            {
-                name: 'upperArmRight',
-                shape: 'capsule',
-                radius: 0.1 * this.scale,
-                height: 0.5 * this.scale,
-                offset: new THREE.Vector3(-0.4 * this.scale, 1.2 * this.scale, 0),
-                jointPoint: new THREE.Vector3(-0.25 * this.scale, 1.3 * this.scale, 0) // Shoulder
-            },
-            {
-                name: 'lowerArmRight',
-                shape: 'capsule',
-                radius: 0.08 * this.scale,
-                height: 0.5 * this.scale,
-                offset: new THREE.Vector3(-0.65 * this.scale, 1.2 * this.scale, 0),
-                jointPoint: new THREE.Vector3(-0.4 * this.scale, 1.2 * this.scale, 0) // Elbow
-            },
-            // Left leg
-            {
-                name: 'upperLegLeft',
-                shape: 'capsule',
-                radius: 0.12 * this.scale,
-                height: 0.6 * this.scale,
-                offset: new THREE.Vector3(0.15 * this.scale, 0.3 * this.scale, 0),
-                jointPoint: new THREE.Vector3(0.15 * this.scale, 0.6 * this.scale, 0) // Hip
-            },
-            {
-                name: 'lowerLegLeft',
-                shape: 'capsule',
-                radius: 0.1 * this.scale,
-                height: 0.6 * this.scale,
-                offset: new THREE.Vector3(0.15 * this.scale, -0.3 * this.scale, 0),
-                jointPoint: new THREE.Vector3(0.15 * this.scale, 0.0, 0) // Knee
-            },
-            // Right leg
-            {
-                name: 'upperLegRight',
-                shape: 'capsule',
-                radius: 0.12 * this.scale,
-                height: 0.6 * this.scale,
-                offset: new THREE.Vector3(-0.15 * this.scale, 0.3 * this.scale, 0),
-                jointPoint: new THREE.Vector3(-0.15 * this.scale, 0.6 * this.scale, 0) // Hip
-            },
-            {
-                name: 'lowerLegRight',
-                shape: 'capsule',
-                radius: 0.1 * this.scale,
-                height: 0.6 * this.scale,
-                offset: new THREE.Vector3(-0.15 * this.scale, -0.3 * this.scale, 0),
-                jointPoint: new THREE.Vector3(-0.15 * this.scale, 0.0, 0) // Knee
-            }
-        ]
-
-        // Create meshes for each body part
-        for (const config of bodyConfigs) {
-            let geometry
-
-            if (config.shape === 'sphere') {
-                geometry = new THREE.SphereGeometry(config.radius, 16, 16)
-            } else if (config.shape === 'box') {
-                geometry = new THREE.BoxGeometry(config.size.x, config.size.y, config.size.z)
-            } else if (config.shape === 'capsule') {
-                geometry = new THREE.CapsuleGeometry(config.radius, config.height, 8, 16)
-            }
-
-            const mesh = new THREE.Mesh(geometry, material.clone())
-            mesh.position.copy(config.offset)
-            mesh.castShadow = true
-            mesh.receiveShadow = true
-            mesh.name = config.name
-
-            this._rootObject.add(mesh)
-
-            // Store body part with metadata
-            this._bodyParts[config.name] = {
-                mesh: mesh,
-                baseOffset: config.offset.clone(),
-                jointPoint: config.jointPoint ? config.jointPoint.clone() : config.offset.clone(),
-                prevPosition: null // For velocity calculation
-            }
-        }
-
-        //console.log(`[HumanoidAnimationComponent] Created ${Object.keys(this._bodyParts).length} body parts`)
+    /**
+     * Set body parts created by the parent controller
+     * @param {Object} bodyParts - Dictionary of body parts with mesh and metadata
+     * @param {THREE.Group} rootObject - Root object containing all body parts
+     */
+    setBodyParts(bodyParts, rootObject) {
+        this._bodyParts = bodyParts
+        this._rootObject = rootObject
+        //console.log('[HumanoidAnimationComponent] Received', Object.keys(bodyParts).length, 'body parts from parent')
     }
 
     _animateLimbs(phase, velocity) {
@@ -334,11 +207,6 @@ export class HumanoidAnimationComponent extends Object3DComponent {
         if (this.object) {
             // Try BaseEnemyController
             let controller = EntityComponentPlugin.GetComponent(this.object, 'BaseEnemyController')
-            if (!controller) {
-                // Try GoliathController (subclass)
-                controller = EntityComponentPlugin.GetComponent(this.object, 'GoliathController')
-            }
-
             if (controller && controller._velocity) {
                 return controller._velocity.clone()
             }
@@ -400,32 +268,13 @@ export class HumanoidAnimationComponent extends Object3DComponent {
         return states
     }
 
-    cleanup() {
-        const scene = this.ctx?.viewer?.scene
-        if (!scene) return
-
-        // Dispose all body part meshes (they're children of _rootObject)
-        for (const part of Object.values(this._bodyParts)) {
-            if (part.mesh) {
-                // Remove from parent (rootObject) first
-                if (part.mesh.parent) {
-                    part.mesh.parent.remove(part.mesh)
-                }
-                part.mesh.geometry?.dispose()
-                part.mesh.material?.dispose()
-            }
-        }
-
-        // Remove root object from scene (cascade removes any remaining children)
-        if (this._rootObject) {
-            scene.remove(this._rootObject)
-            // Dispose root object
-            this._rootObject.clear() // Remove all children
-        }
-
+    /**
+     * Clear internal references only - does NOT destroy body parts
+     * Body part cleanup is handled by the parent controller
+     */
+    _clearReferences() {
         this._bodyParts = {}
         this._rootObject = null
-
-        //console.log('[HumanoidAnimationComponent] Cleaned up')
+        //console.log('[HumanoidAnimationComponent] Cleared references')
     }
 }

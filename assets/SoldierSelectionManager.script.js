@@ -70,7 +70,7 @@ export class SoldierSelectionManager extends Object3DComponent {
         if (!scene) return
 
         scene.traverse((obj) => {
-            const soldier = EntityComponentPlugin.GetComponent(obj, 'SoldierController')
+            const soldier = EntityComponentPlugin.GetComponent(obj, 'RobotTireController')
             if (soldier && !this._soldiers.includes(soldier)) {
                 this._soldiers.push(soldier)
             }

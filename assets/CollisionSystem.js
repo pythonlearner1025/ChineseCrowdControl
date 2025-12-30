@@ -64,7 +64,7 @@ export class CollisionSystem {
             friction = 0.4,
             restitution = 0.3,
             linearDamping = 0.3,
-            angularDamping = 0.5
+            angularDamping = 0.3
         } = options
 
         // Create collision shape based on type
@@ -137,15 +137,15 @@ export class CollisionSystem {
         const type = controller.constructor.ComponentType || controller.constructor.name
 
         // Enemies and Crowd are in same group (both hostile to player/friendlies)
-        if (type === 'BaseEnemyController' || type === 'EnemyData' || type === 'CrowdMember') {
+        if (type === 'Enemy' || type === 'CrowdMember') {
             return 1 << 0  // Group 0: Enemies + Crowd
         }
         // Player
-        if (type === 'PlayerController' || type === 'RobotTireController') {
+        if (type === 'PlayerController') {
             return 1 << 1  // Group 1: Player
         }
         // Friendly units
-        if (type === 'SoldierController' || type === 'FriendlyUnitData') {
+        if (type === 'RobotTireController' || type === 'FriendlyUnitData') {
             return 1 << 2  // Group 2: Friendlies
         }
         return 1 << 3  // Group 3: Other
@@ -155,11 +155,11 @@ export class CollisionSystem {
         const type = controller.constructor.ComponentType || controller.constructor.name
 
         // Enemies + Crowd: collide with player, friendlies, AND other enemies/crowd (for realistic crowding)
-        if (type === 'BaseEnemyController' || type === 'EnemyData' || type === 'CrowdMember') {
+        if (type === 'Enemy' || type === 'CrowdMember') {
             return (1 << 0) | (1 << 1) | (1 << 2)  // Collide with enemies+crowd, player, friendlies
         }
         // Player/friendlies: collide with enemies + crowd
-        if (type === 'PlayerController' || type === 'RobotTireController' || type === 'SoldierController' || type === 'FriendlyUnitData') {
+        if (type === 'PlayerController' || type === 'RobotTireController' || type === 'FriendlyUnitData') {
             return (1 << 0)  // Collide with enemies+crowd group
         }
         return 0xffffffff  // Other: collide with everything
@@ -254,7 +254,7 @@ export class CollisionSystem {
         // Sleeping bodies ignore forces in cannon-es
         body.wakeUp()
 
-        body.applyForce(new CANNON.Vec3(inputX * acceleration * 0, 0, inputZ * acceleration * 0))
+        body.applyForce(new CANNON.Vec3(inputX * acceleration, 0, inputZ * acceleration))
     }
 
     /**
@@ -307,14 +307,14 @@ export class CollisionSystem {
         let victim = null
 
         // Enemy -> Player/Friendly
-        if ((typeA === 'BaseEnemyController' || typeA === 'EnemyData') &&
-            (typeB === 'PlayerController' || typeB === 'RobotTireController' || typeB === 'SoldierController' || typeB === 'FriendlyUnitData')) {
+        if (typeA === 'Enemy' &&
+            (typeB === 'PlayerController' || typeB === 'RobotTireController' || typeB === 'FriendlyUnitData')) {
             attacker = controllerA
             victim = controllerB
         }
         // Player/Friendly -> Enemy
-        else if ((typeA === 'PlayerController' || typeA === 'RobotTireController' || typeA === 'SoldierController' || typeA === 'FriendlyUnitData') &&
-                 (typeB === 'BaseEnemyController' || typeB === 'EnemyData')) {
+        else if ((typeA === 'PlayerController'  || typeA === 'RobotTireController' || typeA === 'FriendlyUnitData') &&
+                 typeB === 'Enemy') {
             attacker = controllerA
             victim = controllerB
         }
@@ -366,7 +366,7 @@ export class CollisionSystem {
      * For gradual migration - eventually remove this
      */
     static checkCollisions(myObject, myController, myVelocity, options = {}) {
-        console.warn('[CollisionSystem] checkCollisions is deprecated - use cannon-es physics bodies')
+        //console.warn('[CollisionSystem] checkCollisions is deprecated - use cannon-es physics bodies')
 
         // Simple fallback for legacy code
         const {

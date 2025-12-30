@@ -26,16 +26,10 @@
         "import": "./assets/CameraFollow.script.js"
       },
       {
-        "import": "./assets/GoliathController.script.js"
-      },
-      {
-        "import": "./assets/SoldierController.script.js"
+        "import": "./assets/RobotTireController.script.js"
       },
       {
         "import": "./assets/SoldierSelectionManager.script.js"
-      },
-      {
-        "import": "./assets/BaseEnemyController.script.js"
       },
       {
         "import": "./assets/CrowdController.script.js"
@@ -51,6 +45,12 @@
       },
       {
         "import": "./assets/EVSpawner.script.js"
+      },
+      {
+        "import": "./assets/EnemySystemManager.script.js"
+      },
+      {
+        "import": "./assets/Crowd.script.js"
       }
     ],
     "viewer": {},

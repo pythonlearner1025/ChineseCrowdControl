@@ -1,4 +1,4 @@
-import {Object3DComponent, EntityComponentPlugin} from 'threepipe'
+import {Object3DComponent} from 'threepipe'
 import * as THREE from 'three'
 
 /**
@@ -35,7 +35,7 @@ export class EVSpawner extends Object3DComponent {
 
     start() {
         if (super.start) super.start()
-        console.log('[EVSpawner] Ready to spawn', this.spawnCount, 'EVs')
+        //console.log('[EVSpawner] Ready to spawn', this.spawnCount, 'EVs')
     }
 
     stop() {
@@ -70,10 +70,10 @@ export class EVSpawner extends Object3DComponent {
             return
         }
 
-        console.log(`[EVSpawner] ========================================`)
-        console.log(`[EVSpawner] SPAWNING ${this.spawnCount} EVs at position:`, spawnerPos)
-        console.log(`[EVSpawner] Spawn radius: ${this.spawnRadius}`)
-        console.log(`[EVSpawner] ========================================`)
+        //console.log(`[EVSpawner] ========================================`)
+        //console.log(`[EVSpawner] SPAWNING ${this.spawnCount} EVs at position:`, spawnerPos)
+        //console.log(`[EVSpawner] Spawn radius: ${this.spawnRadius}`)
+        //console.log(`[EVSpawner] ========================================`)
 
         for (let i = 0; i < this.spawnCount; i++) {
             // Calculate spawn position in circle around spawner
@@ -104,7 +104,7 @@ export class EVSpawner extends Object3DComponent {
             carBody.name = 'EVBody'
             enemyObj.add(carBody)
 
-            console.log(`[EVSpawner] Created car body for EV ${i}, body dimensions: 3x1.5x4`)
+            //console.log(`[EVSpawner] Created car body for EV ${i}, body dimensions: 3x1.5x4`)
 
             // Add a smaller box on top for cabin/roof
             const carRoof = new THREE.Mesh(
@@ -131,107 +131,45 @@ export class EVSpawner extends Object3DComponent {
             // Add to scene
             scene.add(enemyObj)
 
-            // Add BaseEnemyController component
-            this.ctx.ecp.addComponent(enemyObj, 'BaseEnemyController')
-            const controller = EntityComponentPlugin.GetComponent(enemyObj, 'BaseEnemyController')
-
-            if (controller) {
-                // Configure EV stats
-                controller.name = 'EV'
-                controller.health = this._evHealth
-                controller.maxHealth = this._evMaxHealth
-                controller.speed = this._evSpeed
-                controller.damage = this._evDamage
-                controller.armor = this._evArmor
-                controller.detectionRange = this._evDetectionRange
-                controller.attackRange = this._evAttackRange
-
-                // Vehicle physics: heavy mass, good turning
-                controller.mass = this._evMass
-                controller.friction = this._evFriction
-
-                // CRITICAL: Enable cannon-es physics for realistic mass-based collisions!
-                controller.useCannonPhysics = true
-
-                // CRITICAL: EV uses BOX collision shape (not sphere!)
-                // This matches the visual geometry (3×1.5×4 box)
-                controller.useBoxCollision = true
-                controller.boxSize = {width: 3, height: 1.5, depth: 4}
-
-                // NOTE: collisionRadius is ignored when useBoxCollision = true
-                // But keep it for backward compatibility
-                controller.collisionRadius = 2.5
-
-                // Adjust health bar offset for vehicle size
-                controller._healthBarOffset = 2.5
-
-                // Add debugging for movement
-                let updateCount = 0
-                const originalUpdate = controller.update.bind(controller)
-                controller.update = function(params) {
-                    updateCount++
-                    if (updateCount % 120 === 0) { // Log every 2 seconds
-                        const target = this._currentTarget
-                        const myPos = this.object.position
-                        const targetPos = target ? target.position : null
-                        const dist = targetPos ? Math.sqrt(
-                            Math.pow(targetPos.x - myPos.x, 2) +
-                            Math.pow(targetPos.z - myPos.z, 2)
-                        ) : 0
-
-                        console.log(`[EV ${i}] DEBUG:`)
-                        console.log(`  - Position: (${myPos.x.toFixed(1)}, ${myPos.z.toFixed(1)})`)
-                        console.log(`  - Target: ${target ? target.name : 'none'} at (${targetPos?.x.toFixed(1)}, ${targetPos?.z.toFixed(1)})`)
-                        console.log(`  - Distance to target: ${dist.toFixed(1)}`)
-                        console.log(`  - Attack range: ${this.attackRange}`)
-                        console.log(`  - Path length: ${this._path?.length || 0}`)
-                        console.log(`  - Path index: ${this._pathIndex}`)
-                        console.log(`  - Velocity: (${this._velocity?.x.toFixed(2)}, ${this._velocity?.z.toFixed(2)})`)
-                        console.log(`  - Speed: ${this.speed}, Mass: ${this.mass}, Friction: ${this.friction}`)
-                    }
-                    return originalUpdate(params)
-                }
-
-                console.log(`[EVSpawner] EV ${i} configured:`)
-                console.log(`  - Mass: ${controller.mass}, Speed: ${controller.speed}`)
-                console.log(`  - Enabled: ${controller.enabled}`)
-                console.log(`  - Detection range: ${controller.detectionRange}`)
-
-                this._spawnedEnemies.push(enemyObj)
-
-                console.log(`[EVSpawner] ✓ Successfully spawned EV ${i + 1}/${this.spawnCount}`)
-                console.log(`  - Position: (${x.toFixed(1)}, ${spawnerPos.y.toFixed(1)}, ${z.toFixed(1)})`)
-                console.log(`  - Has ${enemyObj.children.length} children (should have 2 boxes)`)
-                console.log(`  - Controller enabled: ${controller.enabled}`)
-                console.log(`  - Object visible: ${enemyObj.visible}`)
-            } else {
-                console.error('[EVSpawner] ✗ FAILED to get BaseEnemyController for EV', i)
+            // Find EnemySystemManager and register enemy with it
+            const enemyManager = this.ctx.ecp.getComponentOfType('EnemySystemManager')
+            if (!enemyManager) {
+                console.error('[EVSpawner] EnemySystemManager not found!')
                 scene.remove(enemyObj)
+                continue
             }
+
+            // Register enemy with manager (manager controls lifecycle)
+            const enemy = enemyManager.registerEnemy(enemyObj, {
+                enemyType: 'ev',
+                health: this._evHealth,
+                maxHealth: this._evMaxHealth,
+                speed: this._evSpeed,
+                damage: this._evDamage,
+                armor: this._evArmor,
+                detectionRange: this._evDetectionRange,
+                attackRange: this._evAttackRange,
+                mass: this._evMass,
+                friction: this._evFriction,
+                collisionRadius: 2.5,
+                animationScale: 1.0,
+                animationColor: 0x44ff44
+            })
+
+            this._spawnedEnemies.push(enemy)
+            //console.log(`[EVSpawner] ✓ Successfully spawned EV ${i + 1}/${this.spawnCount}`)
         }
 
-        console.log(`[EVSpawner] ========================================`)
-        console.log(`[EVSpawner] FINISHED: Spawned ${this._spawnedEnemies.length}/${this.spawnCount} EVs`)
-        console.log(`[EVSpawner] ========================================`)
+        //console.log(`[EVSpawner] ========================================`)
+        //console.log(`[EVSpawner] FINISHED: Spawned ${this._spawnedEnemies.length}/${this.spawnCount} EVs`)
+        //console.log(`[EVSpawner] ========================================`)
     }
 
     cleanup() {
-        // Remove all spawned enemies
-        const scene = this.ctx?.viewer?.scene
-        if (!scene) return
-
-        for (const enemyObj of this._spawnedEnemies) {
-            // Get controller to clean up properly
-            const controller = EntityComponentPlugin.GetComponent(enemyObj, 'BaseEnemyController')
-            if (controller && controller.stop) {
-                controller.stop()
-            }
-
-            scene.remove(enemyObj)
-        }
-
+        // Enemies are managed by EnemySystemManager - it handles cleanup
+        // Just clear our reference list
         this._spawnedEnemies = []
-        console.log('[EVSpawner] Cleaned up all EVs')
+        //console.log('[EVSpawner] Cleared enemy references')
     }
 
     // ==================== UI CONFIG ====================

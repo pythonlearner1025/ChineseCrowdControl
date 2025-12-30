@@ -4,21 +4,21 @@ import {getPhysicsWorldManager} from './PhysicsWorldController.script.js'
 import {CollisionSystem} from './CollisionSystem.js'
 
 /**
- * SoldierController - Individual soldier with selection and movement commands
+ * RobotTireController - Individual soldier with selection and movement commands
  */
-export class SoldierController extends Object3DComponent {
+export class RobotTireController extends Object3DComponent {
     static StateProperties = [
        'enabled', 'health', 'maxHealth', 'armor', 'damage',
        'detectionRange', 'attackRange'
     ]
-    static ComponentType = 'SoldierController'
+    static ComponentType = 'RobotTireController'
 
     // Component enabled flag (required for update loop)
     enabled = true
 
     // Core attributes
     baseSpeed = 1000        // max speed
-    health = 50
+    health = 100
     maxHealth = 50
     armor = 2
     damage = 10         // base damage on impact
@@ -48,7 +48,7 @@ export class SoldierController extends Object3DComponent {
 
     // Physics
     mass = 10.0          // heavier = more momentum
-    friction = 3        // lower = keeps momentum longer
+    friction = 6        // higher = stops faster, less gliding
     acceleration = 300  // how fast they accelerate
 
     // Impact tracking
@@ -70,7 +70,7 @@ export class SoldierController extends Object3DComponent {
     start() {
         //console.log('start', this.baseSpeed)
         if (super.start) super.start()
-        //console.log('[SoldierController] Soldier spawned')
+        //console.log('[RobotTireController] Soldier spawned')
         
         this._velocity = new THREE.Vector3(0, 0, 0)
         this._displayedHealth = this.health
@@ -123,18 +123,18 @@ export class SoldierController extends Object3DComponent {
     select() {
         this._isSelected = true
         this._updateSelectionVisual()
-        //console.log('[SoldierController] Selected')
+        //console.log('[RobotTireController] Selected')
     }
 
     deselect() {
         this._isSelected = false
         this._updateSelectionVisual()
-        //console.log('[SoldierController] Deselected')
+        //console.log('[RobotTireController] Deselected')
     }
 
     setGroup(groupId) {
         this._groupId = groupId
-        //console.log(`[SoldierController] Assigned to group ${groupId}`)
+        //console.log(`[RobotTireController] Assigned to group ${groupId}`)
     }
 
     clearGroup() {
@@ -261,7 +261,7 @@ export class SoldierController extends Object3DComponent {
         this._targetPosition = position.clone()
         this._isMoving = true
         this._autoTargetEnemy = null  // clear auto-target when user gives command
-        //console.log(`[SoldierController] Moving to ${position.x.toFixed(1)}, ${position.z.toFixed(1)}`)
+        //console.log(`[RobotTireController] Moving to ${position.x.toFixed(1)}, ${position.z.toFixed(1)}`)
 
         // Wake up the render loop
         this.ctx?.viewer?.setDirty()
@@ -348,8 +348,7 @@ export class SoldierController extends Object3DComponent {
             if (obj === this.object) return
 
             // Check for enemy controllers
-            const enemy = EntityComponentPlugin.GetComponent(obj, 'BaseEnemyController') ||
-                          EntityComponentPlugin.GetComponent(obj, 'GoliathController')
+            const enemy = EntityComponentPlugin.GetComponent(obj, 'BaseEnemyController')
 
             if (enemy && enemy.isAlive) {
                 const dist = myPos.distanceTo(obj.position)
@@ -502,7 +501,7 @@ export class SoldierController extends Object3DComponent {
             collisionDamageScale: this.impactDamageScale, // Speed-scaled damage
             cooldownMap: this._impactCooldowns,
             cooldownMs: this._impactCooldownMs,
-            collideWith: ['BaseEnemyController', 'GoliathController', 'PlayerController', 'RobotTireController', 'SoldierController']
+            collideWith: ['BaseEnemyController', 'PlayerController', 'RobotTireController']
         })
 
         // Visual feedback for high-speed collisions
@@ -521,59 +520,61 @@ export class SoldierController extends Object3DComponent {
             }
         }
 
-        // Handle crowd collisions separately (not in CollisionSystem yet)
+        // Handle enemy collisions (via EnemySystemManager)
         const myPos = this.object.position
         const now = Date.now()
 
         viewer.scene.traverse((obj) => {
-            const crowdController = EntityComponentPlugin.GetComponent(obj, 'CrowdController')
-            if (crowdController && crowdController._members) {
-                this._checkCrowdCollisions(crowdController, myPos, currentSpeed, now, 1.5)
+            const enemyManager = EntityComponentPlugin.GetComponent(obj, 'EnemySystemManager')
+            if (enemyManager && enemyManager._enemies) {
+                this._checkEnemyManagerCollisions(enemyManager, myPos, currentSpeed, now, 1.5)
             }
         })
     }
 
     // Collision methods removed - now using unified CollisionSystem
 
-    _checkCrowdCollisions(crowdController, myPos, currentSpeed, now, hitRadius) {
-        for (const member of crowdController._members) {
-            if (!member || !member.isAlive || !member.mesh) continue
+    _checkEnemyManagerCollisions(enemyManager, myPos, currentSpeed, now, hitRadius) {
+        // Check collisions with all enemies managed by EnemySystemManager
+        for (const enemy of enemyManager._enemies) {
+            if (!enemy || !enemy.isAlive || !enemy.mesh) continue
 
-            const dist = myPos.distanceTo(member.mesh.position)
-            
+            const dist = myPos.distanceTo(enemy.mesh.position)
+
             if (dist < hitRadius) {
-                // Check cooldown using member as key
-                const lastImpact = this._impactCooldowns.get(member) || 0
+                // Check cooldown using enemy as key
+                const lastImpact = this._impactCooldowns.get(enemy) || 0
                 if (now - lastImpact < this._impactCooldownMs) continue
 
                 // Calculate impact damage
                 if (currentSpeed > 0.01) {
                     const impactDamage = this.damage + (currentSpeed * this.impactDamageScale)
 
-                    member.takeDamage(impactDamage, this)
+                    enemy.takeDamage(impactDamage, this)
                 }
 
                 // Set cooldown
-                this._impactCooldowns.set(member, now)
+                this._impactCooldowns.set(enemy, now)
 
-                // Direction from crowd member to soldier
+                // Direction from enemy to soldier
                 const pushDir = new THREE.Vector3()
-                    .subVectors(myPos, member.mesh.position)
+                    .subVectors(myPos, enemy.mesh.position)
                     .normalize()
-                
-                // Mass-based collision (crowd members are light ~1.0)
-                const memberMass = member.mass || 1.0
+
+                // Mass-based collision (enemies are light ~1.5)
+                const enemyMass = enemy.mass || 1.5
                 const myMass = this.mass  // 10.0
-                const totalMass = myMass + memberMass
-                
+
                 // Newton's 3rd law: lighter object gets pushed more
-                const memberPushStrength = currentSpeed * (myMass / memberMass) * 1.5
-                const selfPushStrength = currentSpeed * (memberMass / myMass) * 0.3
-                
-                // Push crowd member hard
-                member.velocity.x -= pushDir.x * memberPushStrength
-                member.velocity.z -= pushDir.z * memberPushStrength
-                
+                const enemyPushStrength = currentSpeed * (myMass / enemyMass) * 1.5
+                const selfPushStrength = currentSpeed * (enemyMass / myMass) * 0.3
+
+                // Push enemy hard
+                if (enemy._velocity) {
+                    enemy._velocity.x -= pushDir.x * enemyPushStrength
+                    enemy._velocity.z -= pushDir.z * enemyPushStrength
+                }
+
                 // Soldier gets slight pushback
                 this._velocity.x += pushDir.x * selfPushStrength
                 this._velocity.z += pushDir.z * selfPushStrength
@@ -634,7 +635,7 @@ export class SoldierController extends Object3DComponent {
         const effectiveDamage = Math.max(1, amount - this.armor)
         this.health -= effectiveDamage
 
-        //console.log(`[SoldierController] Took ${effectiveDamage} damage (${this.health}/${this.maxHealth} HP)`)
+        //console.log(`[RobotTireController] Took ${effectiveDamage} damage (${this.health}/${this.maxHealth} HP)`)
 
         if (this.health <= 0) {
             this._die(attacker)
@@ -642,7 +643,7 @@ export class SoldierController extends Object3DComponent {
     }
 
     _die(attacker = null) {
-        //console.log('[SoldierController] Died!')
+        //console.log('[RobotTireController] Died!')
         this.deselect()
 
         // Hide object first (ensure death happens)
@@ -669,19 +670,19 @@ export class SoldierController extends Object3DComponent {
 
             this._spawnRagdoll(worldPos, impactVelocity)
         } catch (error) {
-            console.error('[SoldierController] Error spawning ragdoll:', error)
+            console.error('[RobotTireController] Error spawning ragdoll:', error)
         }
     }
 
     _spawnRagdoll(position, velocity) {
         const scene = this.ctx?.viewer?.scene
         if (!scene) {
-            console.warn('[SoldierController] No scene found for ragdoll')
+            console.warn('[RobotTireController] No scene found for ragdoll')
             return
         }
 
         if (!this.ctx?.ecp) {
-            console.warn('[SoldierController] ECP not available for ragdoll')
+            console.warn('[RobotTireController] ECP not available for ragdoll')
             return
         }
 
@@ -697,7 +698,7 @@ export class SoldierController extends Object3DComponent {
         const ragdoll = EntityComponentPlugin.GetComponent(ragdollObj, 'RagdollComponent')
 
         if (ragdoll) {
-            //console.log('[SoldierController] Spawning soldier ragdoll at', position)
+            //console.log('[RobotTireController] Spawning soldier ragdoll at', position)
             // Spawn ragdoll with blue color for soldiers
             ragdoll.spawnRagdoll(position, velocity, {
                 scale: 1.0,
@@ -705,7 +706,7 @@ export class SoldierController extends Object3DComponent {
                 enemyType: 'Soldier'
             })
         } else {
-            console.warn('[SoldierController] Failed to get RagdollComponent')
+            console.warn('[RobotTireController] Failed to get RagdollComponent')
         }
     }
 
@@ -732,7 +733,7 @@ export class SoldierController extends Object3DComponent {
 
     uiConfig = {
         type: 'folder',
-        label: 'SoldierController',
+        label: 'RobotTireController',
         children: [
             {
                 type: 'button',

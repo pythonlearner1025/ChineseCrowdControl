@@ -4,17 +4,15 @@ import {CollisionSystem} from './CollisionSystem.js'
 import {getPhysicsWorldManager} from './PhysicsWorldController.script.js'
 
 /**
- * WASD movement controller for robot tire units with combat attributes
- * (Formerly PlayerController - renamed for clarity)
+ * PlayerController - WASD movement controller for the player character
  */
-export class RobotTireController extends Object3DComponent {
+export class PlayerController extends Object3DComponent {
     static StateProperties = [
         'running', 'speed', 'health', 'maxHealth', 'armor',
         'attackRange', 'damage', 'attackFrequency', 'invulnerabilityTime',
-        'projectileSpeed', 'projectileSize', 'projectileColor',
-        'autoFire', 'homingStrength', 'mass', 'friction', 'healthRegen'
+        'mass', 'friction', 'healthRegen'
     ]
-    static ComponentType = 'RobotTireController'
+    static ComponentType = 'PlayerController'
 
     running = true
     speed = 10 // units per second (max speed)
@@ -29,13 +27,6 @@ export class RobotTireController extends Object3DComponent {
     invulnerabilityTime = 0.5 // seconds of invulnerability after being hit
     healthRegen = 0.10    // 10% of max health per second
 
-    // Projectile attributes
-    projectileSpeed = 15  // units per second
-    projectileSize = 0.2  // radius of the ball
-    projectileColor = 0xffcc00 // golden yellow
-    autoFire = true       // automatically fire at enemies in range
-    homingStrength = 5    // how aggressively projectiles track (radians/sec turn rate)
-
     // Physics attributes
     mass = 0.5            // low mass = snappy direction changes
     friction = 20         // high friction = sharp turns, minimal drift
@@ -47,11 +38,6 @@ export class RobotTireController extends Object3DComponent {
     // Internal combat state
     _isAlive = true
     _lastDamageTime = 0
-    _lastAttackTime = 0
-    _projectiles = []     // active projectiles in flight
-    _raycaster = null
-    _mouse = null
-    _cachedEnemies = []   // cached list of enemies for targeting
 
     // Collision damage settings
     collisionRadius = 1.2         // how close entities must be to deal collision damage
@@ -79,15 +65,8 @@ export class RobotTireController extends Object3DComponent {
         if (super.start) super.start()
         this._handleKeyDown = this._handleKeyDown.bind(this)
         this._handleKeyUp = this._handleKeyUp.bind(this)
-        this._handleMouseDown = this._handleMouseDown.bind(this)
         window.addEventListener('keydown', this._handleKeyDown)
         window.addEventListener('keyup', this._handleKeyUp)
-        window.addEventListener('mousedown', this._handleMouseDown)
-
-        // Setup raycaster for aiming
-        this._raycaster = new THREE.Raycaster()
-        this._mouse = new THREE.Vector2()
-        this._projectiles = []
 
         // Initialize physics
         this._velocity = new THREE.Vector3(0, 0, 0)
@@ -121,23 +100,19 @@ export class RobotTireController extends Object3DComponent {
                 shapeType: 'sphere',
                 shapeSize: { radius: this.collisionRadius * 0.5 },
                 mass: this.mass,
-                friction: 0.4,
+                friction: 0.8,
                 restitution: 0.3,
-                linearDamping: 0.3
+                linearDamping: 0.8
             }
         )
 
-        console.log('[PlayerController] Cannon-es physics body created with mass:', this.mass)
+        //console.log('[PlayerController] Cannon-es physics body created with mass:', this.mass)
     }
 
     stop() {
         if (super.stop) super.stop()
         window.removeEventListener('keydown', this._handleKeyDown)
         window.removeEventListener('keyup', this._handleKeyUp)
-        window.removeEventListener('mousedown', this._handleMouseDown)
-
-        // Cleanup projectiles
-        this._cleanupAllProjectiles()
 
         // Cleanup health bar
         this._removeHealthBar()
@@ -251,18 +226,6 @@ export class RobotTireController extends Object3DComponent {
         }
     }
 
-    _cleanupAllProjectiles() {
-        const scene = this.ctx?.viewer?.scene
-        if (scene) {
-            for (const proj of this._projectiles) {
-                scene.remove(proj.mesh)
-                proj.mesh.geometry.dispose()
-                proj.mesh.material.dispose()
-            }
-        }
-        this._projectiles = []
-    }
-
     _handleKeyDown(event) {
         const key = event.key.toLowerCase()
         if (key in this.keys) {
@@ -277,322 +240,12 @@ export class RobotTireController extends Object3DComponent {
         }
     }
 
-    _handleMouseDown(event) {
-        // Only fire on left click
-        if (event.button !== 0) return
-        if (!this.isAlive || !this.running) return
-
-        // Check attack cooldown
-        const now = Date.now()
-        const cooldown = 1000 / this.attackFrequency
-        if (now - this._lastAttackTime < cooldown) return
-
-        this._lastAttackTime = now
-        this._fireProjectileManual(event)
-    }
-
-    // ==================== TARGETING ====================
-
-    _findEnemiesInRange() {
-        const viewer = this.ctx?.viewer
-        if (!viewer || !this.object) return []
-
-        const enemies = []
-        const myPos = this.object.position
-
-        viewer.scene.traverse((obj) => {
-            if (obj === this.object) return
-
-            const enemyController = EntityComponentPlugin.GetComponent(obj, 'BaseEnemyController') ||
-                                    EntityComponentPlugin.GetComponent(obj, 'GoliathController')
-
-            if (enemyController && enemyController.isAlive) {
-                const dist = myPos.distanceTo(obj.position)
-                if (dist <= this.attackRange) {
-                    enemies.push({ object: obj, controller: enemyController, distance: dist })
-                }
-            }
-        })
-
-        // Sort by distance (closest first)
-        enemies.sort((a, b) => a.distance - b.distance)
-        return enemies
-    }
-
-    _findClosestEnemy() {
-        const enemies = this._findEnemiesInRange()
-        return enemies.length > 0 ? enemies[0] : null
-    }
-
-    // ==================== PROJECTILE FIRING ====================
-
-    _fireProjectileManual(event) {
-        const viewer = this.ctx?.viewer
-        if (!viewer) return
-
-        const camera = viewer.scene.mainCamera
-        if (!camera) return
-
-        // Get mouse position in normalized device coordinates
-        const rect = viewer.container.getBoundingClientRect()
-        this._mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
-        this._mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1
-
-        // Cast ray from camera through mouse position
-        this._raycaster.setFromCamera(this._mouse, camera)
-
-        // Calculate direction to shoot (use ray direction)
-        const direction = this._raycaster.ray.direction.clone().normalize()
-
-        // Find closest enemy for homing target
-        const closestEnemy = this._findClosestEnemy()
-
-        this._createProjectile(direction, closestEnemy?.object || null)
-    }
-
-    _fireProjectileAtTarget(targetObj) {
-        if (!this.object || !targetObj) return
-
-        // Calculate direction from player to target
-        const startPos = this.object.position.clone()
-        startPos.y += 1
-
-        const targetPos = targetObj.position.clone()
-        targetPos.y += 1 // aim at chest height
-
-        const direction = new THREE.Vector3()
-            .subVectors(targetPos, startPos)
-            .normalize()
-
-        this._createProjectile(direction, targetObj)
-    }
-
-    _createProjectile(direction, target = null) {
-        const viewer = this.ctx?.viewer
-        if (!viewer) return
-
-        // Create projectile starting from player position
-        const startPos = this.object.position.clone()
-        startPos.y += 1 // offset up a bit (shoot from chest height)
-
-        // Create projectile mesh
-        const geometry = new THREE.SphereGeometry(this.projectileSize, 16, 16)
-        const material = new THREE.MeshStandardMaterial({
-            color: this.projectileColor,
-            emissive: this.projectileColor,
-            emissiveIntensity: 0.5,
-            metalness: 0.3,
-            roughness: 0.4
-        })
-        const mesh = new THREE.Mesh(geometry, material)
-        mesh.position.copy(startPos)
-        mesh.name = 'Projectile'
-
-        // Add to scene
-        viewer.scene.add(mesh)
-
-        // Store projectile data with homing target
-        this._projectiles.push({
-            mesh,
-            direction: direction.clone(),
-            distanceTraveled: 0,
-            startPos: startPos.clone(),
-            target // homing target (can be null)
-        })
-    }
-
-    _tryAutoFire() {
-        if (!this.autoFire || !this.isAlive || !this.running) return
-
-        const now = Date.now()
-        const cooldown = 1000 / this.attackFrequency
-        if (now - this._lastAttackTime < cooldown) return // still on cooldown
-
-        // Find closest enemy in range
-        const closestEnemy = this._findClosestEnemy()
-        if (!closestEnemy) {
-            return
-        }
-
-        this._lastAttackTime = now
-        this._fireProjectileAtTarget(closestEnemy.object)
-    }
-
-    _updateProjectiles(deltaTime) {
-        const viewer = this.ctx?.viewer
-        if (!viewer) return
-
-        const scene = viewer.scene
-        const moveAmount = this.projectileSpeed * (deltaTime / 1000)
-        const dt = deltaTime / 1000
-
-        // Process each projectile
-        for (let i = this._projectiles.length - 1; i >= 0; i--) {
-            const proj = this._projectiles[i]
-
-            // Apply homing if target exists and is alive
-            this._applyHoming(proj, dt)
-
-            // Move projectile
-            proj.mesh.position.x += proj.direction.x * moveAmount
-            proj.mesh.position.y += proj.direction.y * moveAmount
-            proj.mesh.position.z += proj.direction.z * moveAmount
-            proj.distanceTraveled += moveAmount
-
-            // Check if out of range
-            if (proj.distanceTraveled >= this.attackRange) {
-                this._removeProjectile(i, scene)
-                continue
-            }
-
-            // Check for enemy collision
-            const hit = this._checkProjectileHit(proj)
-            if (hit) {
-                this._onProjectileHit(hit, proj)
-                this._removeProjectile(i, scene)
-            }
-        }
-    }
-
-    _applyHoming(proj, dt) {
-        // Check if target is valid
-        if (!proj.target) return
-
-        const targetController = EntityComponentPlugin.GetComponent(proj.target, 'BaseEnemyController') ||
-                                  EntityComponentPlugin.GetComponent(proj.target, 'GoliathController')
-
-        // If target is dead, try to find a new one
-        if (!targetController || !targetController.isAlive) {
-            const newTarget = this._findClosestEnemy()
-            proj.target = newTarget?.object || null
-            if (!proj.target) return
-        }
-
-        // Calculate desired direction to target
-        const projPos = proj.mesh.position
-        const targetPos = proj.target.position.clone()
-        targetPos.y += 1 // aim at chest height
-
-        const desiredDir = new THREE.Vector3()
-            .subVectors(targetPos, projPos)
-            .normalize()
-
-        // Smoothly rotate current direction towards desired direction
-        // Using spherical interpolation for smooth turning
-        const maxTurnAngle = this.homingStrength * dt
-
-        // Calculate angle between current and desired direction
-        const dot = proj.direction.dot(desiredDir)
-        const angle = Math.acos(Math.min(1, Math.max(-1, dot)))
-
-        if (angle > 0.001) {
-            // Clamp turn rate
-            const turnFraction = Math.min(1, maxTurnAngle / angle)
-
-            // Interpolate direction
-            proj.direction.lerp(desiredDir, turnFraction).normalize()
-        }
-    }
-
-    _checkProjectileHit(proj) {
-        const viewer = this.ctx?.viewer
-        if (!viewer) return null
-
-        const projPos = proj.mesh.position
-        const hitRadius = this.projectileSize + 0.5 // projectile + enemy radius
-
-        // Find all enemies and check distance
-        let closestHit = null
-        let closestDist = Infinity
-
-        viewer.scene.traverse((obj) => {
-            if (obj === this.object) return // skip self
-            if (obj === proj.mesh) return   // skip projectile itself
-
-            // Check if this object has an enemy controller
-            const enemyController = EntityComponentPlugin.GetComponent(obj, 'BaseEnemyController') ||
-                                    EntityComponentPlugin.GetComponent(obj, 'GoliathController')
-
-            if (enemyController && enemyController.isAlive) {
-                const dist = projPos.distanceTo(obj.position)
-                if (dist < hitRadius && dist < closestDist) {
-                    closestDist = dist
-                    closestHit = { object: obj, controller: enemyController }
-                }
-            }
-        })
-
-        return closestHit
-    }
-
-    _onProjectileHit(hit, proj) {
-        // Deal damage to enemy
-        if (typeof hit.controller.takeDamage === 'function') {
-            hit.controller.takeDamage(this.damage, this)
-        }
-
-        // Visual feedback - brief flash
-        this._createHitEffect(proj.mesh.position)
-    }
-
-    _createHitEffect(position) {
-        const viewer = this.ctx?.viewer
-        if (!viewer) return
-
-        // Create expanding ring effect
-        const geometry = new THREE.RingGeometry(0.1, 0.3, 16)
-        const material = new THREE.MeshBasicMaterial({
-            color: 0xff6600,
-            transparent: true,
-            opacity: 1,
-            side: THREE.DoubleSide
-        })
-        const ring = new THREE.Mesh(geometry, material)
-        ring.position.copy(position)
-        ring.rotation.x = -Math.PI / 2 // lay flat
-
-        viewer.scene.add(ring)
-
-        // Animate expansion and fade
-        const startTime = Date.now()
-        const duration = 300
-
-        const animate = () => {
-            const elapsed = Date.now() - startTime
-            const t = elapsed / duration
-
-            if (t >= 1) {
-                viewer.scene.remove(ring)
-                geometry.dispose()
-                material.dispose()
-                return
-            }
-
-            ring.scale.setScalar(1 + t * 3)
-            material.opacity = 1 - t
-
-            requestAnimationFrame(animate)
-        }
-        animate()
-    }
-
-    _removeProjectile(index, scene) {
-        const proj = this._projectiles[index]
-        scene.remove(proj.mesh)
-        proj.mesh.geometry.dispose()
-        proj.mesh.material.dispose()
-        this._projectiles.splice(index, 1)
-    }
-
     update(params) {
         try {
             if (!this.object) return false
 
             const deltaTime = params?.deltaTime || params?.delta || 16
             const dt = deltaTime / 1000
-
-            // Always update projectiles even if not running
-            this._updateProjectiles(deltaTime)
 
             // Always update health bar
             this._updateHealthBar(deltaTime)
@@ -608,11 +261,8 @@ export class RobotTireController extends Object3DComponent {
                 if (this._physicsBody) {
                     CollisionSystem.syncObjectToBody(this.object, this, this._physicsBody)
                 }
-                return this._projectiles.length > 0 || (this._velocity && this._velocity.lengthSq() > 0.001)
+                return (this._velocity && this._velocity.lengthSq() > 0.001)
             }
-
-            // Auto-fire at enemies in range
-            this._tryAutoFire()
 
             // Calculate desired movement direction
             let inputX = 0
@@ -640,7 +290,7 @@ export class RobotTireController extends Object3DComponent {
                 CollisionSystem.syncObjectToBody(this.object, this, this._physicsBody)
 
                 // Apply movement force (cannon-es will integrate this)
-                const acceleration = this.speed * 10
+                const acceleration = this.speed
                 CollisionSystem.applyMovementForce(this._physicsBody, inputX, inputZ, acceleration)
 
                 // Sync FROM body (read physics results from previous frame)
@@ -777,19 +427,19 @@ export class RobotTireController extends Object3DComponent {
 
             this._spawnRagdoll(worldPos, impactVelocity)
         } catch (error) {
-            console.error('[RobotTireController] Error spawning ragdoll:', error)
+            console.error('[PlayerController] Error spawning ragdoll:', error)
         }
     }
 
     _spawnRagdoll(position, velocity) {
         const scene = this.ctx?.viewer?.scene
         if (!scene) {
-            console.warn('[RobotTireController] No scene found for ragdoll')
+            console.warn('[PlayerController] No scene found for ragdoll')
             return
         }
 
         if (!this.ctx?.ecp) {
-            console.warn('[RobotTireController] ECP not available for ragdoll')
+            console.warn('[PlayerController] ECP not available for ragdoll')
             return
         }
 
@@ -813,7 +463,7 @@ export class RobotTireController extends Object3DComponent {
                 enemyType: 'Player'
             })
         } else {
-            console.warn('[RobotTireController] Failed to get RagdollComponent')
+            console.warn('[PlayerController] Failed to get RagdollComponent')
         }
     }
 
@@ -835,7 +485,7 @@ export class RobotTireController extends Object3DComponent {
 
     uiConfig = {
         type: 'folder',
-        label: 'Robot Tire Controller',
+        label: 'Player Controller',
         children: [
             {
                 type: 'button',
@@ -849,9 +499,4 @@ export class RobotTireController extends Object3DComponent {
             },
         ],
     }
-}
-
-// Keep PlayerController as an alias for backward compatibility
-export class PlayerController extends RobotTireController {
-    static ComponentType = 'PlayerController'
 }
