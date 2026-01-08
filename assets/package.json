@@ -1,0 +1,19 @@
+{
+  "name": "assets",
+  "version": "1.0.0",
+  "private": true,
+  "description": "",
+  "scripts": {},
+  "mainScene": "assets/main.scene.glb",
+  "main": "./main.js",
+  "keywords": [
+    "3d",
+    "game",
+    "threepipe",
+    "three-editor"
+  ],
+  "dependencies": {
+    "threepipe": ">=0.4.2",
+    "@kite3d/mcp-bridge": ">=0.0.1"
+  }
+}
