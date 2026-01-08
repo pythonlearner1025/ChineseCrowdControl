@@ -1,12 +1,20 @@
 import {Object3DComponent, EntityComponentPlugin} from 'threepipe'
+import * as THREE from 'three'
 
 /**
- * DayNightManager - Manages day/night cycle and enemy spawning
+ * DayNightManager - Manages day/night cycle, lighting, and enemy spawning
  * Singleton component - should only have one in the scene
+ *
+ * Lighting from PRD:
+ * - Day: DirectionalLight 1.0, AmbientLight 0.4
+ * - Night: DirectionalLight 0.2, AmbientLight 0.1
  */
 export class DayNightManager extends Object3DComponent {
     static StateProperties = [
-        'isDay', 'countdownDuration', 'autoEndNight'
+        'isDay', 'countdownDuration', 'autoEndNight',
+        'dayDirectionalIntensity', 'dayAmbientIntensity',
+        'nightDirectionalIntensity', 'nightAmbientIntensity',
+        'lightTransitionDuration'
     ]
     static ComponentType = 'DayNightManager'
 
@@ -16,6 +24,19 @@ export class DayNightManager extends Object3DComponent {
     countdownDuration = 5000  // 5 seconds in milliseconds
     autoEndNight = true  // automatically end night when all enemies dead
 
+    // Lighting settings (from PRD section 15)
+    dayDirectionalIntensity = 1.0
+    dayAmbientIntensity = 0.4
+    nightDirectionalIntensity = 0.2
+    nightAmbientIntensity = 0.1
+    lightTransitionDuration = 1000 // ms for smooth transition
+
+    // Environment colors
+    _dayBackgroundColor = 0x87CEEB  // Light sky blue
+    _nightBackgroundColor = 0x0E1116  // Dark asphalt from PRD
+    _dayDirectionalColor = 0xffffee  // Warm sunlight
+    _nightDirectionalColor = 0x6688cc  // Cool moonlight
+
     // Internal state
     _spaceKeyDown = false
     _spaceKeyDownTime = 0
@@ -24,8 +45,28 @@ export class DayNightManager extends Object3DComponent {
     _handleKeyUp = null
     _enemyCount = 0
 
+    // Light references
+    _directionalLight = null
+    _ambientLight = null
+    _lightTransitionStart = 0
+    _isLightTransitioning = false
+    _startDirectionalIntensity = 0
+    _startAmbientIntensity = 0
+    _targetDirectionalIntensity = 0
+    _targetAmbientIntensity = 0
+    _startBackgroundColor = null
+    _targetBackgroundColor = null
+    _startDirectionalColor = null
+    _targetDirectionalColor = null
+
     start() {
         if (super.start) super.start()
+
+        // Find lights in scene
+        this._findLights()
+
+        // Set initial lighting state (day)
+        this._applyLightingInstant(true)
 
         // Bind keyboard event handlers
         this._handleKeyDown = this._onKeyDown.bind(this)
@@ -33,8 +74,137 @@ export class DayNightManager extends Object3DComponent {
 
         window.addEventListener('keydown', this._handleKeyDown)
         window.addEventListener('keyup', this._handleKeyUp)
+    }
 
-        //console.log('[DayNightManager] Started - Press and hold SPACE for 5 seconds to start night')
+    // ==================== LIGHTING SYSTEM ====================
+
+    _findLights() {
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) return
+
+        scene.traverse((obj) => {
+            if (obj.type === 'DirectionalLight' || obj.isDirectionalLight) {
+                this._directionalLight = obj
+            }
+            if (obj.type === 'AmbientLight' || obj.isAmbientLight) {
+                this._ambientLight = obj
+            }
+        })
+    }
+
+    /**
+     * Apply lighting instantly (no transition)
+     */
+    _applyLightingInstant(isDay) {
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) return
+
+        if (this._directionalLight) {
+            this._directionalLight.intensity = isDay ?
+                this.dayDirectionalIntensity : this.nightDirectionalIntensity
+            this._directionalLight.color.setHex(isDay ?
+                this._dayDirectionalColor : this._nightDirectionalColor)
+        }
+
+        if (this._ambientLight) {
+            this._ambientLight.intensity = isDay ?
+                this.dayAmbientIntensity : this.nightAmbientIntensity
+        }
+
+        // Set background color
+        if (scene.background === null || scene.background instanceof THREE.Color) {
+            scene.background = new THREE.Color(isDay ?
+                this._dayBackgroundColor : this._nightBackgroundColor)
+        }
+    }
+
+    /**
+     * Start smooth lighting transition
+     */
+    _startLightTransition(toDay) {
+        this._isLightTransitioning = true
+        this._lightTransitionStart = Date.now()
+
+        // Store current values as start
+        if (this._directionalLight) {
+            this._startDirectionalIntensity = this._directionalLight.intensity
+            this._startDirectionalColor = this._directionalLight.color.clone()
+        }
+        if (this._ambientLight) {
+            this._startAmbientIntensity = this._ambientLight.intensity
+        }
+
+        const scene = this.ctx?.viewer?.scene
+        if (scene && scene.background instanceof THREE.Color) {
+            this._startBackgroundColor = scene.background.clone()
+        } else {
+            this._startBackgroundColor = new THREE.Color(
+                toDay ? this._nightBackgroundColor : this._dayBackgroundColor
+            )
+        }
+
+        // Set targets
+        this._targetDirectionalIntensity = toDay ?
+            this.dayDirectionalIntensity : this.nightDirectionalIntensity
+        this._targetAmbientIntensity = toDay ?
+            this.dayAmbientIntensity : this.nightAmbientIntensity
+        this._targetBackgroundColor = new THREE.Color(toDay ?
+            this._dayBackgroundColor : this._nightBackgroundColor)
+        this._targetDirectionalColor = new THREE.Color(toDay ?
+            this._dayDirectionalColor : this._nightDirectionalColor)
+    }
+
+    /**
+     * Update lighting transition (called in update loop)
+     */
+    _updateLightTransition() {
+        if (!this._isLightTransitioning) return
+
+        const elapsed = Date.now() - this._lightTransitionStart
+        const t = Math.min(1, elapsed / this.lightTransitionDuration)
+
+        // Ease function (smooth step)
+        const eased = t * t * (3 - 2 * t)
+
+        // Interpolate directional light
+        if (this._directionalLight) {
+            this._directionalLight.intensity =
+                this._startDirectionalIntensity +
+                (this._targetDirectionalIntensity - this._startDirectionalIntensity) * eased
+
+            if (this._startDirectionalColor && this._targetDirectionalColor) {
+                this._directionalLight.color.lerpColors(
+                    this._startDirectionalColor,
+                    this._targetDirectionalColor,
+                    eased
+                )
+            }
+        }
+
+        // Interpolate ambient light
+        if (this._ambientLight) {
+            this._ambientLight.intensity =
+                this._startAmbientIntensity +
+                (this._targetAmbientIntensity - this._startAmbientIntensity) * eased
+        }
+
+        // Interpolate background color
+        const scene = this.ctx?.viewer?.scene
+        if (scene && this._startBackgroundColor && this._targetBackgroundColor) {
+            if (!scene.background || !(scene.background instanceof THREE.Color)) {
+                scene.background = new THREE.Color()
+            }
+            scene.background.lerpColors(
+                this._startBackgroundColor,
+                this._targetBackgroundColor,
+                eased
+            )
+        }
+
+        // Check if transition complete
+        if (t >= 1) {
+            this._isLightTransitioning = false
+        }
     }
 
     stop() {
@@ -117,53 +287,46 @@ export class DayNightManager extends Object3DComponent {
             return
         }
 
-        //console.log('[DayNightManager] ========================================')
-        //console.log('[DayNightManager] NIGHT BEGINS!')
-        //console.log('[DayNightManager] ========================================')
         this.isTransitioning = true
         this._removeCountdownUI()
 
+        // Start lighting transition to night
+        this._startLightTransition(false)
+
         // Find and trigger all spawners
         const spawners = this._findAllSpawners()
-        //console.log(`[DayNightManager] Found ${spawners.length} spawners:`)
 
         let totalEnemies = 0
         for (const spawner of spawners) {
-            const spawnerType = spawner.constructor.name
-            //console.log(`  - ${spawnerType}: enabled=${spawner.enabled}, spawnCount=${spawner.spawnCount}`)
-
             if (spawner.enabled && typeof spawner.spawn === 'function') {
-                //console.log(`  → Triggering ${spawnerType}.spawn()...`)
                 spawner.spawn()
                 totalEnemies += spawner.spawnCount || 0
-            } else {
-                console.warn(`  ✗ Skipping ${spawnerType} (disabled or no spawn method)`)
             }
         }
 
         this._enemyCount = totalEnemies
-        //console.log(`[DayNightManager] Total expected enemies: ${totalEnemies}`)
-        //console.log('[DayNightManager] ========================================')
 
         this.isDay = false
         this.isTransitioning = false
 
-        // Show night start message
-        this._showMessage('NIGHT PHASE', 2000)
+        // Show night start message with dramatic styling
+        this._showMessage('NIGHT PHASE', 2000, '#ff4444')
     }
 
     endNight() {
         if (this.isDay || this.isTransitioning) return
 
-        //console.log('[DayNightManager] NIGHT ENDS - Day begins')
         this.isTransitioning = true
+
+        // Start lighting transition to day
+        this._startLightTransition(true)
 
         this.isDay = true
         this.isTransitioning = false
         this._enemyCount = 0
 
         // Show day start message
-        this._showMessage('DAY PHASE', 2000)
+        this._showMessage('DAY PHASE', 2000, '#44ff44')
     }
 
     _findAllSpawners() {
@@ -173,9 +336,12 @@ export class DayNightManager extends Object3DComponent {
 
         // Find all spawner components
         scene.traverse((obj) => {
-            // Check for each spawner type
-            const evSpawner = EntityComponentPlugin.GetComponent(obj, 'EVSpawner')
+            // Check for CrowdController (main enemy spawner)
+            const crowdController = EntityComponentPlugin.GetComponent(obj, 'CrowdController')
+            if (crowdController) spawners.push(crowdController)
 
+            // Check for EVSpawner
+            const evSpawner = EntityComponentPlugin.GetComponent(obj, 'EVSpawner')
             if (evSpawner) spawners.push(evSpawner)
         })
 
@@ -188,7 +354,20 @@ export class DayNightManager extends Object3DComponent {
 
         let count = 0
 
+        // Count CrowdController members
         scene.traverse((obj) => {
+            const crowdController = EntityComponentPlugin.GetComponent(obj, 'CrowdController')
+            if (crowdController && crowdController._members) {
+                count += crowdController._members.filter(m => m.isAlive).length
+            }
+
+            // Also check EnemySystemManager
+            const enemyManager = EntityComponentPlugin.GetComponent(obj, 'EnemySystemManager')
+            if (enemyManager && enemyManager._enemies) {
+                count += enemyManager._enemies.filter(e => e.isAlive).length
+            }
+
+            // Legacy: individual enemy components
             const enemy = EntityComponentPlugin.GetComponent(obj, 'BaseEnemyController') ||
                          EntityComponentPlugin.GetComponent(obj, 'EnemyData')
 
@@ -216,7 +395,7 @@ export class DayNightManager extends Object3DComponent {
         return cityHallDestroyed
     }
 
-    _showMessage(text, duration = 2000) {
+    _showMessage(text, duration = 2000, color = '#ffffff') {
         const messageDiv = document.createElement('div')
         messageDiv.style.position = 'fixed'
         messageDiv.style.top = '20%'
@@ -224,26 +403,36 @@ export class DayNightManager extends Object3DComponent {
         messageDiv.style.transform = 'translate(-50%, -50%)'
         messageDiv.style.fontSize = '80px'
         messageDiv.style.fontWeight = 'bold'
-        messageDiv.style.color = '#ffffff'
+        messageDiv.style.color = color
         messageDiv.style.textAlign = 'center'
-        messageDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.6)'
+        messageDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.7)'
         messageDiv.style.padding = '30px 60px'
         messageDiv.style.borderRadius = '15px'
         messageDiv.style.zIndex = '9998'
-        messageDiv.style.textShadow = '0 0 15px rgba(255, 255, 255, 0.8)'
+        messageDiv.style.textShadow = `0 0 20px ${color}`
+        messageDiv.style.border = `3px solid ${color}`
         messageDiv.textContent = text
 
-        document.body.appendChild(messageDiv)
+        const container = this.ctx?.viewer?.container || document.body
+        container.appendChild(messageDiv)
 
+        // Fade out animation
         setTimeout(() => {
-            document.body.removeChild(messageDiv)
-        }, duration)
+            messageDiv.style.transition = 'opacity 0.3s ease-out'
+            messageDiv.style.opacity = '0'
+            setTimeout(() => {
+                messageDiv.remove()
+            }, 300)
+        }, duration - 300)
     }
 
     // ==================== UPDATE ====================
 
     update({deltaTime}) {
         if (!this.object) return false
+
+        // Update lighting transition
+        this._updateLightTransition()
 
         // Check space key hold for countdown
         if (this._spaceKeyDown && this.isDay && !this.isTransitioning) {
@@ -265,7 +454,6 @@ export class DayNightManager extends Object3DComponent {
         if (!this.isDay && !this.isTransitioning && this.autoEndNight) {
             // Check if City Hall destroyed (game over)
             if (this._checkCityHallDestroyed()) {
-                //console.log('[DayNightManager] City Hall destroyed - night ends in defeat')
                 this.endNight()
                 return true
             }
@@ -273,7 +461,6 @@ export class DayNightManager extends Object3DComponent {
             // Check if all enemies dead
             const aliveEnemies = this._countAliveEnemies()
             if (aliveEnemies === 0 && this._enemyCount > 0) {
-                //console.log('[DayNightManager] All enemies defeated - night ends in victory!')
                 this.endNight()
             }
         }

@@ -139,6 +139,15 @@ class CrowdMember {
             // Hide mesh first (ensure death happens)
             this.mesh.visible = false
 
+            // Remove physics body and debug visualization
+            if (this._physicsBody && this.controller) {
+                const physicsManager = getPhysicsWorldManager()
+                if (physicsManager && physicsManager.world) {
+                    CollisionSystem.removeBody(this.mesh, physicsManager.world)
+                    this._physicsBody = null
+                }
+            }
+
             // Clean up humanoid body parts (CRITICAL - removes the 10 frozen body parts!)
             // Manager is responsible for cleanup, not data class
             if (scene && this.controller) {
@@ -191,11 +200,15 @@ class CrowdMember {
 
 /**
  * CrowdController - Spawns and manages N crowd members with A* pathfinding
+ *
+ * IMPORTANT: Crowds should only spawn at night!
+ * Set spawnOnlyAtNight=true (default) to wait for DayNightManager
  */
 export class CrowdController extends Object3DComponent {
     static StateProperties = [
         'enabled', 'crowdSize', 'spawnRadius', 'memberHealth', 'memberSpeed',
-        'memberDamage', 'separationRadius', 'separationStrength', 'respawnDelay'
+        'memberDamage', 'separationRadius', 'separationStrength', 'respawnDelay',
+        'spawnOnlyAtNight'
     ]
     static ComponentType = 'CrowdController'
 
@@ -208,14 +221,18 @@ export class CrowdController extends Object3DComponent {
     separationRadius = 1.5
     separationStrength = 3.0
     respawnDelay = 5000
+    spawnOnlyAtNight = true  // If true, only spawn when night begins
 
     // Internal
     _members = []
+    _target = null  // Primary target (City Hall or player)
+    _cityHall = null
     _player = null
     _initialized = false
     _gridSize = 1
     _debugTimer = 0
     _physicsWorld = null    // Cannon-es world reference
+    _hasSpawned = false     // Track if already spawned this night
 
     // Collision settings (deprecated - cannon-es handles collisions now)
     collisionRadius = 1.0   // radius for crowd-soldier collision
@@ -227,6 +244,9 @@ export class CrowdController extends Object3DComponent {
         if (super.start) super.start()
         this._members = []
         this._player = null
+        this._cityHall = null
+        this._target = null
+        this._hasSpawned = false
 
         // Get physics world
         const physicsManager = getPhysicsWorldManager()
@@ -236,14 +256,66 @@ export class CrowdController extends Object3DComponent {
         }
         this._physicsWorld = physicsManager.world
 
-        // Find player
+        // Find targets (City Hall is primary target per PRD)
+        this._findCityHall()
         this._findPlayer()
 
-        // Spawn crowd with cannon-es physics
-        this._spawnCrowd()
-        this._initialized = true
+        // Only spawn immediately if NOT waiting for night
+        if (!this.spawnOnlyAtNight) {
+            this._spawnCrowd()
+        }
 
-        //console.log(`[CrowdController] Started with ${this._members.length} members using cannon-es physics`)
+        this._initialized = true
+    }
+
+    // Property for DayNightManager to read expected enemy count
+    get spawnCount() {
+        return this.crowdSize
+    }
+
+    /**
+     * Called by DayNightManager when night begins
+     * This is the proper way to spawn crowds at night
+     */
+    spawn() {
+        if (!this.enabled) return
+        if (this._hasSpawned) return  // Don't spawn twice per night
+
+        this._spawnCrowd()
+        this._hasSpawned = true
+    }
+
+    /**
+     * Called when day begins - reset spawn state
+     */
+    onDayStart() {
+        this._hasSpawned = false
+        // Optionally cleanup remaining crowds
+        this._cleanup()
+    }
+
+    _findCityHall() {
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) return null
+
+        // Find City Hall by component
+        const cityHallComp = this.ctx?.ecp?.getComponentOfType?.('CityHall')
+        if (cityHallComp && cityHallComp.object) {
+            this._cityHall = cityHallComp.object
+            this._target = this._cityHall  // City Hall is primary target
+            return this._cityHall
+        }
+
+        // Fallback: find by name
+        scene.traverse((obj) => {
+            if (this._cityHall) return
+            if (obj.name && obj.name.toLowerCase().includes('cityhall')) {
+                this._cityHall = obj
+                this._target = this._cityHall
+            }
+        })
+
+        return this._cityHall
     }
 
     stop() {
@@ -395,6 +467,7 @@ export class CrowdController extends Object3DComponent {
     // No need to manually find soldiers for collision detection
 
     _spawnCrowd() {
+        //console.log('[CrowdController] Spawning crowd...')
         const scene = this.ctx?.viewer?.scene
         if (!scene || !this.object) return
 
@@ -435,6 +508,7 @@ export class CrowdController extends Object3DComponent {
         member.addHealthBarToScene(scene)
 
         // CREATE CANNON-ES PHYSICS BODY for crowd member
+        //console.log("_physicsWorld: ", this._physicsWorld, "")
         if (this._physicsWorld) {
             member._physicsBody = CollisionSystem.getOrCreateBody(
                 mesh,
@@ -442,14 +516,16 @@ export class CrowdController extends Object3DComponent {
                 this._physicsWorld,
                 {
                     bodyType: 'dynamic',  // Fully physics-controlled
-                    shapeType: 'sphere',
-                    shapeSize: { radius: member.collisionRadius },
+                    shapeType: 'box',
+                    shapeSize: { width:1, height: 2, depth: 1 },
                     mass: member.mass,
-                    friction: 0.8,
-                    restitution: 0.3,
-                    linearDamping: 0.8
+                    friction: 0.000,       // Very low friction - prevents "stuck" when grouped
+                    restitution: 0.1,     // Low bounce
+                    linearDamping: 0.1    // Higher damping to control max speed
                 }
             )
+
+            //console.log('[_spawnMember] created physical body: ', member._physicsBody)
 
             // Store velocity reference for syncing
             member._velocity = new THREE.Vector3()
@@ -655,38 +731,64 @@ export class CrowdController extends Object3DComponent {
             // Sync TO body (prepare input for physics)
             CollisionSystem.syncObjectToBody(member.mesh, member, member._physicsBody)
 
-            // No player? Just idle (no forces applied)
-            if (!this._player) {
+            // Determine target: City Hall first, then player
+            let target = this._cityHall || this._target || this._player
+            if (!target) {
+                // Try to find targets again
+                this._findCityHall()
+                this._findPlayer()
+                target = this._cityHall || this._player
+            }
+
+            // No target? Just idle (no forces applied)
+            if (!target) {
                 return
             }
 
-            const playerPos = this._player.position
-            const distToPlayer = Math.sqrt(
-                Math.pow(playerPos.x - myPos.x, 2) +
-                Math.pow(playerPos.z - myPos.z, 2)
+            const targetPos = target.position
+            const distToTarget = Math.sqrt(
+                Math.pow(targetPos.x - myPos.x, 2) +
+                Math.pow(targetPos.z - myPos.z, 2)
             )
 
             // Outside detection range - idle
-            if (distToPlayer > member.detectionRange) {
+            if (distToTarget > member.detectionRange) {
                 return
             }
 
+            // Check if target is City Hall (has larger hitbox)
+            const cityHallComp = EntityComponentPlugin.GetComponent(target, 'CityHall')
+
+            // Effective attack range: base range + target's hitbox radius
+            // City Hall is 3x3, so hitbox radius is ~1.5 units
+            const targetHitboxRadius = cityHallComp ? 1.5 : 0
+            const effectiveAttackRange = member.attackRange + targetHitboxRadius
+
             // In attack range - attack (no movement)
-            if (distToPlayer <= member.attackRange) {
+            if (distToTarget <= effectiveAttackRange) {
                 const cooldown = 1000 / member.attackFrequency
                 if (now - member.lastAttackTime >= cooldown) {
                     member.lastAttackTime = now
-                    const playerController = EntityComponentPlugin.GetComponent(this._player, 'PlayerController')
-                    if (playerController && typeof playerController.takeDamage === 'function') {
-                        playerController.takeDamage(member.damage, member)
+
+                    // Attack City Hall or Player
+                    if (cityHallComp && typeof cityHallComp.takeDamage === 'function') {
+                        cityHallComp.takeDamage(member.damage, member)
+                    } else {
+                        const playerController = EntityComponentPlugin.GetComponent(target, 'PlayerController')
+                        if (playerController && typeof playerController.takeDamage === 'function') {
+                            playerController.takeDamage(member.damage, member)
+                        }
                     }
                 }
+                // CRITICAL: Still sync physics body -> mesh even when in attack range
+                // Without this, body position drifts from mesh, making member invulnerable
+                CollisionSystem.syncBodyToObject(member.mesh, member, member._physicsBody)
                 return
             }
 
             // Update path periodically
             if (now - member.lastPathUpdate > member.pathUpdateInterval || member.path.length === 0) {
-                member.path = this._findPath(myPos.x, myPos.z, playerPos.x, playerPos.z)
+                member.path = this._findPath(myPos.x, myPos.z, targetPos.x, targetPos.z)
                 member.pathIndex = 0
                 member.lastPathUpdate = now
             }
@@ -715,7 +817,7 @@ export class CrowdController extends Object3DComponent {
             // Already normalized from pathfinding, no need to normalize again
 
             // Apply movement force via cannon-es
-            const acceleration = member.speed
+            const acceleration = member.speed * 3
             CollisionSystem.applyMovementForce(member._physicsBody, inputX, inputZ, acceleration)
 
             // Sync FROM body (read physics results from previous frame)
