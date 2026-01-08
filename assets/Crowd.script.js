@@ -37,8 +37,8 @@ export class Crowd extends Object3DComponent {
     spawnRadius = 8
 
     // Member stats
-    memberHealth = 50
-    memberSpeed = 8
+    memberHealth = 100
+    memberSpeed = 10
     memberDamage = 5
     memberAttackRange = 1.5
     memberDetectionRange = 100
@@ -66,7 +66,7 @@ export class Crowd extends Object3DComponent {
         // Spawn crowd members
         this._spawnCrowd()
 
-        console.log(`[Crowd] Spawned ${this._spawnedEnemies.length} crowd members`)
+        //console.log(`[Crowd] Spawned ${this._spawnedEnemies.length} crowd members`)
     }
 
     stop() {
@@ -149,7 +149,7 @@ export class Crowd extends Object3DComponent {
             this._spawnCrowdMember(center, this._spawnedEnemies.length, scene)
         }
 
-        console.log(`[Crowd] Spawned 5 more. Total: ${this._spawnedEnemies.length}`)
+        //console.log(`[Crowd] Spawned 5 more. Total: ${this._spawnedEnemies.length}`)
     }
 
     KillAll = () => {
@@ -159,7 +159,7 @@ export class Crowd extends Object3DComponent {
             }
         }
 
-        console.log('[Crowd] Killed all crowd members')
+        //console.log('[Crowd] Killed all crowd members')
     }
 
     uiConfig = {

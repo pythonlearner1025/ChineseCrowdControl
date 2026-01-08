@@ -17,12 +17,12 @@ export class RobotTireController extends Object3DComponent {
     enabled = true
 
     // Core attributes
-    baseSpeed = 1000        // max speed
-    health = 100
-    maxHealth = 50
+    baseSpeed = 3000        // max speed
+    health = 10000
+    maxHealth = 10000
     armor = 2
-    damage = 10         // base damage on impact
-    impactDamageScale = 5.0  // damage multiplier per unit of speed
+    damage = 50         // base damage on impact
+    impactDamageScale = 0.10  // damage multiplier per unit of speed
 
     // Auto-attack attributes
     detectionRange = 25  // how far they can detect enemies
@@ -49,7 +49,7 @@ export class RobotTireController extends Object3DComponent {
     // Physics
     mass = 10.0          // heavier = more momentum
     friction = 6        // higher = stops faster, less gliding
-    acceleration = 300  // how fast they accelerate
+    acceleration = 500  // how fast they accelerate
 
     // Impact tracking
     _impactCooldowns = new Map()  // enemy -> last impact time
@@ -75,12 +75,38 @@ export class RobotTireController extends Object3DComponent {
         this._velocity = new THREE.Vector3(0, 0, 0)
         this._displayedHealth = this.health
         this._impactCooldowns = new Map()
-
+        
         this._createSelectionRing()
         this._createHealthBar()
-
+        
         // Register with manager
         this._registerWithManager()
+
+        // Register physics body with CollisionSystem
+        const physicsManager = getPhysicsWorldManager()
+        if (physicsManager && physicsManager.world) {
+            //console.log('[RobotTireController] Registering physics body for', this.object.name)
+            this._physicsBody = CollisionSystem.getOrCreateBody(
+                this.object,
+                this,
+                physicsManager.world,
+                {
+                    bodyType: 'dynamic',  // Fully physics-controlled
+                    shapeType: 'box',
+                    shapeSize: { width:1, height: 1, depth: 1 },
+                    mass: this.mass,
+                    friction: this.friction / 10, // Convert to cannon-es scale
+                    restitution: 0.3,
+                    linearDamping: 0.3,
+                    angularDamping: 0.3
+                }
+            )
+        } else {
+            console.warn('[RobotTireController] Physics manager not available!', {
+                hasManager: !!physicsManager,
+                hasWorld: physicsManager ? !!physicsManager.world : false
+            })
+        }
 
         // Trigger update loop
         this.ctx?.viewer?.setDirty()
@@ -88,6 +114,15 @@ export class RobotTireController extends Object3DComponent {
 
     stop() {
         if (super.stop) super.stop()
+
+        // Remove physics body
+        const physicsManager = getPhysicsWorldManager()
+        if (physicsManager && physicsManager.world && this._physicsBody) {
+            //console.log('[RobotTireController] Removing physics body for', this.object.name)
+            CollisionSystem.removeBody(this.object, physicsManager.world)
+            this._physicsBody = null
+        }
+
         this._removeSelectionRing()
         this._removeHealthBar()
         this._unregisterFromManager()
@@ -97,7 +132,7 @@ export class RobotTireController extends Object3DComponent {
     _registerWithManager() {
         const scene = this.ctx?.viewer?.scene
         if (!scene) return
-
+        
         scene.traverse((obj) => {
             const manager = EntityComponentPlugin.GetComponent(obj, 'SoldierSelectionManager')
             if (manager) {
@@ -109,7 +144,7 @@ export class RobotTireController extends Object3DComponent {
     _unregisterFromManager() {
         const scene = this.ctx?.viewer?.scene
         if (!scene) return
-
+        
         scene.traverse((obj) => {
             const manager = EntityComponentPlugin.GetComponent(obj, 'SoldierSelectionManager')
             if (manager) {
@@ -157,7 +192,7 @@ export class RobotTireController extends Object3DComponent {
         this._selectionRing.rotation.x = -Math.PI / 2 // lay flat
         this._selectionRing.position.y = 0.05 // slightly above ground
         this._selectionRing.visible = false
-
+        
         this.object.add(this._selectionRing)
     }
 
@@ -172,9 +207,9 @@ export class RobotTireController extends Object3DComponent {
 
     _updateSelectionVisual() {
         if (!this._selectionRing) return
-
+        
         this._selectionRing.visible = this._isSelected
-
+        
         // Color based on group
         if (this._groupId !== null) {
             const colors = [0x00ff00, 0xff6600, 0x0066ff, 0xff00ff, 0xffff00]
@@ -275,6 +310,14 @@ export class RobotTireController extends Object3DComponent {
     }
 
     _updateMovement(dt) {
+        if (!this._physicsBody) return
+
+        // Sync velocity from physics body
+        if (this._physicsBody) {
+            this._velocity.x = this._physicsBody.velocity.x
+            this._velocity.z = this._physicsBody.velocity.z
+        }
+
         // Priority 1: User command
         if (this._userTargetPosition) {
             const myPos = this.object.position
@@ -287,17 +330,15 @@ export class RobotTireController extends Object3DComponent {
                 this._userTargetPosition = null
                 this._targetPosition = null
                 this._isMoving = false
-                this._applyPhysics(dt, 0, 0)
+                //this._applyPhysics(dt, 0, 0)
                 return
             }
 
-            // Move towards user target
+            // Move towards user target using physics forces
             const inputX = dx / dist
             const inputZ = dz / dist
-            this._applyPhysics(dt, inputX, inputZ)
-
-            // Still attack enemies in range while moving
-            this._checkEnemyCollisions()
+            CollisionSystem.applyMovementForce(this._physicsBody, inputX, inputZ, this.acceleration)
+            this._updateRotation(dt)
             return
         }
 
@@ -314,26 +355,37 @@ export class RobotTireController extends Object3DComponent {
             const dz = this._targetPosition.z - myPos.z
             const dist = Math.sqrt(dx * dx + dz * dz)
 
-            // If in attack range, stop and attack
+            // If in attack range, stop (no force applied)
             if (dist <= this.attackRange) {
-                this._applyPhysics(dt, 0, 0)
-                this._checkEnemyCollisions()  // deals damage
+                this._updateRotation(dt)
                 return
             }
 
-            // Move towards enemy
+            // Move towards enemy using physics forces
             const inputX = dx / dist
             const inputZ = dz / dist
-            this._applyPhysics(dt, inputX, inputZ)
-            this._checkEnemyCollisions()
+            CollisionSystem.applyMovementForce(this._physicsBody, inputX, inputZ, this.acceleration)
+            this._updateRotation(dt)
             return
         }
 
-        // Priority 3: Idle (no command, no enemies)
+        // Priority 3: Idle (no command, no enemies) - just let physics damping slow down
         this._autoTargetEnemy = null
         this._targetPosition = null
         this._isMoving = false
-        this._applyPhysics(dt, 0, 0)
+        this._updateRotation(dt)
+    }
+
+    _updateRotation(dt) {
+        // Face movement direction (smooth rotation)
+        const currentSpeed = this.getCurrentSpeed()
+        if (currentSpeed > 0.1 && this._velocity) {
+            const targetRotation = Math.atan2(this._velocity.x, this._velocity.z)
+            let rotDiff = targetRotation - this.object.rotation.y
+            while (rotDiff > Math.PI) rotDiff -= Math.PI * 2
+            while (rotDiff < -Math.PI) rotDiff += Math.PI * 2
+            this.object.rotation.y += rotDiff * Math.min(1, 10 * dt)
+        }
     }
 
     _findNearestEnemy() {
@@ -344,6 +396,21 @@ export class RobotTireController extends Object3DComponent {
         let closest = null
         let closestDist = this.detectionRange
 
+        // Find CrowdController and check its members
+        const crowdControllers = this.ctx?.ecp?.getComponentsOfType?.('CrowdController') || []
+        for (const crowdCtrl of crowdControllers) {
+            if (!crowdCtrl._members) continue
+            for (const member of crowdCtrl._members) {
+                if (!member.isAlive || !member.mesh) continue
+                const dist = myPos.distanceTo(member.mesh.position)
+                if (dist < closestDist) {
+                    closestDist = dist
+                    closest = { object: member.mesh, controller: member, distance: dist }
+                }
+            }
+        }
+
+        // Also check for legacy enemy controllers
         viewer.scene.traverse((obj) => {
             if (obj === this.object) return
 
@@ -362,118 +429,7 @@ export class RobotTireController extends Object3DComponent {
         return closest
     }
 
-    _applyPhysics(dt, inputX, inputZ) {
-        if (!this._velocity) {
-            this._velocity = new THREE.Vector3(0, 0, 0)
-        }
-
-        // F = ma, so a = F/m. Acceleration force based on input
-        const accel = this.acceleration / this.mass
-
-        if (inputX !== 0 || inputZ !== 0) {
-            this._velocity.x += inputX * accel * dt
-            this._velocity.z += inputZ * accel * dt
-        }
-
-        // Apply friction/dampening (exponential decay)
-        const frictionFactor = Math.exp(-this.friction * dt)
-        this._velocity.x *= frictionFactor
-        this._velocity.z *= frictionFactor
-
-        // Clamp to max speed
-        const currentSpeed = this.getCurrentSpeed()
-        if (currentSpeed > this.baseSpeed) {
-            const scale = this.baseSpeed / currentSpeed
-            //console.log('scale', scale)
-            this._velocity.x *= scale
-            this._velocity.z *= scale
-        }
-
-        // Calculate new position
-        const newX = this.object.position.x + this._velocity.x * dt * 8
-        const newZ = this.object.position.z + this._velocity.z * dt * 8
-
-        // Check collision with ragdoll bodies
-        const adjustedPos = this._checkRagdollCollision(newX, newZ)
-        this.object.position.x = adjustedPos.x
-        this.object.position.z = adjustedPos.z
-
-        // Face movement direction (smooth rotation)
-        if (currentSpeed > 0.1) {
-            const targetRotation = Math.atan2(this._velocity.x, this._velocity.z)
-            let rotDiff = targetRotation - this.object.rotation.y
-            while (rotDiff > Math.PI) rotDiff -= Math.PI * 2
-            while (rotDiff < -Math.PI) rotDiff += Math.PI * 2
-            this.object.rotation.y += rotDiff * Math.min(1, 10 * dt)
-        }
-
-        // Stop if very slow
-        if (currentSpeed < 0.01) {
-            this._velocity.x = 0
-            this._velocity.z = 0
-        }
-    }
-
-    _checkRagdollCollision(newX, newZ) {
-        // Get physics world manager to access ragdolls
-        const physicsManager = getPhysicsWorldManager()
-        if (!physicsManager || !physicsManager.ragdolls) {
-            return {x: newX, z: newZ}
-        }
-
-        const soldierRadius = 0.5 // Collision radius for soldier
-        const soldierPos = {x: newX, y: this.object.position.y, z: newZ}
-        let finalX = newX
-        let finalZ = newZ
-
-        // Check collision with all ragdoll bodies
-        for (const ragdoll of physicsManager.ragdolls) {
-            if (!ragdoll._bodies || !ragdoll._isActive) continue
-
-            for (const body of ragdoll._bodies) {
-                const bodyPos = body.position
-                const dx = soldierPos.x - bodyPos.x
-                const dz = soldierPos.z - bodyPos.z
-                const dy = soldierPos.y - bodyPos.y
-                const distXZ = Math.sqrt(dx * dx + dz * dz)
-
-                // Only check horizontal collision (ignore vertical distance for now)
-                // Get body radius (approximate from shape)
-                let bodyRadius = 0.3 // Default radius
-                if (body.shapes[0]) {
-                    const shape = body.shapes[0]
-                    if (shape.radius) {
-                        bodyRadius = shape.radius
-                    } else if (shape.halfExtents) {
-                        bodyRadius = Math.max(shape.halfExtents.x, shape.halfExtents.z)
-                    }
-                }
-
-                const minDist = soldierRadius + bodyRadius
-
-                // Collision detected - only if bodies are at similar heights
-                if (distXZ < minDist && Math.abs(dy) < 1.5) {
-                    // Push soldier away from ragdoll body
-                    if (distXZ > 0.01) { // Avoid division by zero
-                        const pushDistance = minDist - distXZ
-                        const pushX = (dx / distXZ) * pushDistance
-                        const pushZ = (dz / distXZ) * pushDistance
-
-                        finalX += pushX
-                        finalZ += pushZ
-
-                        // Also apply a small push to the ragdoll body for realism
-                        const pushForce = 15 // Small force
-                        body.velocity.x -= (dx / distXZ) * pushForce
-                        body.velocity.z -= (dz / distXZ) * pushForce
-                        body.wakeUp() // Wake up the body if it was sleeping
-                    }
-                }
-            }
-        }
-
-        return {x: finalX, z: finalZ}
-    }
+    // Custom physics removed - now using CollisionSystem with cannon-es
 
     getCurrentSpeed() {
         if (!this._velocity) return 0
@@ -485,147 +441,8 @@ export class RobotTireController extends Object3DComponent {
     }
 
     // ==================== IMPACT DAMAGE ====================
-
-    _checkEnemyCollisions() {
-        const viewer = this.ctx?.viewer
-        if (!viewer) return
-
-        const currentSpeed = this.getCurrentSpeed()
-
-        // Use CollisionSystem for physics-based collisions
-        // CollisionSystem.checkCollisions(this.object, this, this._velocity, {
-        //     collisionRadius: 1.5,
-        //     applyPhysics: true,                           // Apply momentum transfer
-        //     dealDamage: true,                             // Soldiers deal damage on collision
-        //     baseDamage: currentSpeed > 0.01 ? this.damage : 0,  // Base damage only if moving
-        //     collisionDamageScale: this.impactDamageScale, // Speed-scaled damage
-        //     cooldownMap: this._impactCooldowns,
-        //     cooldownMs: this._impactCooldownMs,
-        //     collideWith: ['Crowd', 'PlayerController', 'RobotTireController']
-        // })
-
-        // Visual feedback for high-speed collisions
-        if (currentSpeed > 0.01) {
-            // Check if we just collided (cooldown map has recent entries)
-            const now = Date.now()
-            let hadRecentCollision = false
-            for (const [entity, time] of this._impactCooldowns.entries()) {
-                if (now - time < 100) { // Within 100ms
-                    hadRecentCollision = true
-                    break
-                }
-            }
-            if (hadRecentCollision) {
-                this._createImpactEffect(this.object.position)
-            }
-        }
-
-        // Handle enemy collisions (via EnemySystemManager)
-        const myPos = this.object.position
-        const now = Date.now()
-
-        viewer.scene.traverse((obj) => {
-            const enemyManager = EntityComponentPlugin.GetComponent(obj, 'EnemySystemManager')
-            if (enemyManager && enemyManager._enemies) {
-                this._checkEnemyManagerCollisions(enemyManager, myPos, currentSpeed, now, 1.5)
-            }
-        })
-    }
-
-    // Collision methods removed - now using unified CollisionSystem
-
-    _checkEnemyManagerCollisions(enemyManager, myPos, currentSpeed, now, hitRadius) {
-        // Check collisions with all enemies managed by EnemySystemManager
-        for (const enemy of enemyManager._enemies) {
-            if (!enemy || !enemy.isAlive || !enemy.mesh) continue
-
-            const dist = myPos.distanceTo(enemy.mesh.position)
-
-            if (dist < hitRadius) {
-                // Check cooldown using enemy as key
-                const lastImpact = this._impactCooldowns.get(enemy) || 0
-                if (now - lastImpact < this._impactCooldownMs) continue
-
-                // Calculate impact damage
-                if (currentSpeed > 0.01) {
-                    const impactDamage = this.damage + (currentSpeed * this.impactDamageScale)
-
-                    enemy.takeDamage(impactDamage, this)
-                }
-
-                // Set cooldown
-                this._impactCooldowns.set(enemy, now)
-
-                // Direction from enemy to soldier
-                const pushDir = new THREE.Vector3()
-                    .subVectors(myPos, enemy.mesh.position)
-                    .normalize()
-
-                // Mass-based collision (enemies are light ~1.5)
-                const enemyMass = enemy.mass || 1.5
-                const myMass = this.mass  // 10.0
-
-                // Newton's 3rd law: lighter object gets pushed more
-                const enemyPushStrength = currentSpeed * (myMass / enemyMass) * 1.5
-                const selfPushStrength = currentSpeed * (enemyMass / myMass) * 0.3
-
-                // Push enemy hard
-                if (enemy._velocity) {
-                    enemy._velocity.x -= pushDir.x * enemyPushStrength
-                    enemy._velocity.z -= pushDir.z * enemyPushStrength
-                }
-
-                // Soldier gets slight pushback
-                this._velocity.x += pushDir.x * selfPushStrength
-                this._velocity.z += pushDir.z * selfPushStrength
-
-                // Visual feedback
-                if (currentSpeed > 0.01) {
-                    this._createImpactEffect(myPos)
-                }
-            }
-        }
-    }
-
-    _createImpactEffect(position) {
-        const viewer = this.ctx?.viewer
-        if (!viewer) return
-
-        const geometry = new THREE.RingGeometry(0.2, 0.5, 16)
-        const material = new THREE.MeshBasicMaterial({
-            color: 0xff4400,
-            transparent: true,
-            opacity: 1,
-            side: THREE.DoubleSide
-        })
-        const ring = new THREE.Mesh(geometry, material)
-        ring.position.copy(position)
-        ring.position.y = 0.1
-        ring.rotation.x = -Math.PI / 2
-
-        viewer.scene.add(ring)
-
-        const startTime = Date.now()
-        const duration = 200
-
-        const animate = () => {
-            const elapsed = Date.now() - startTime
-            const t = elapsed / duration
-
-            if (t >= 1) {
-                viewer.scene.remove(ring)
-                geometry.dispose()
-                material.dispose()
-                return
-            }
-
-            ring.scale.setScalar(1 + t * 2)
-            material.opacity = 1 - t
-
-            requestAnimationFrame(animate)
-        }
-        animate()
-    }
+    // Collision detection and damage handling moved to CollisionSystem
+    // Collision listeners are attached to each body in CollisionSystem.getOrCreateBody() automatically
 
     // ==================== COMBAT ====================
 
@@ -649,6 +466,13 @@ export class RobotTireController extends Object3DComponent {
         // Hide object first (ensure death happens)
         if (this.object) {
             this.object.visible = false
+        }
+
+        // Remove physics body and debug visualization
+        const physicsManager = getPhysicsWorldManager()
+        if (physicsManager && physicsManager.world && this._physicsBody) {
+            CollisionSystem.removeBody(this.object, physicsManager.world)
+            this._physicsBody = null
         }
 
         // Try to spawn ragdoll (non-blocking)
@@ -725,7 +549,7 @@ export class RobotTireController extends Object3DComponent {
         }
 
         this._updateMovement(dt)
-        this._checkEnemyCollisions()
+        // Collision detection/damage handled automatically by CollisionSystem
 
         // Always return true to keep the update loop running
         return true

@@ -5,12 +5,12 @@ import {Object3DComponent} from 'threepipe'
  * with three zoom levels cyclable with Z key
  */
 export class CameraFollow extends Object3DComponent {
-    static StateProperties = ['currentZoomLevel', 'smoothing', 'offsetX', 'offsetY', 'offsetZ']
+    static StateProperties = ['currentZoomLevel', 'offsetX', 'offsetY', 'offsetZ']
     static ComponentType = 'CameraFollow'
 
     target = null // Automatically found by name "Player"
     currentZoomLevel = 1 // 0, 1, or 2
-    smoothing = 0.1 // Camera follow smoothness (0-1, higher = faster)
+    smooth = 1.0 // Camera follow smoothness (0-1, higher = faster)
 
     // Additional offset from calculated position
     offsetX = 0
@@ -78,9 +78,7 @@ export class CameraFollow extends Object3DComponent {
             const desiredZ = targetZ + baseOffsetZ + this.offsetZ
 
             // Smooth follow using lerp
-            this.object.position.x += (desiredX - this.object.position.x) * this.smoothing
-            this.object.position.y += (desiredY - this.object.position.y) * this.smoothing
-            this.object.position.z += (desiredZ - this.object.position.z) * this.smoothing
+            this.object.position.set(desiredX, desiredY, desiredZ)
 
             // Always look at the target
             this.object.lookAt(targetX, targetY, targetZ)
@@ -103,14 +101,6 @@ export class CameraFollow extends Object3DComponent {
                 max: 2,
                 step: 1
             },
-            {
-                type: 'slider',
-                property: 'smoothing',
-                label: 'Smoothing',
-                min: 0.01,
-                max: 1,
-                step: 0.01
-            }
         ],
     }
 }

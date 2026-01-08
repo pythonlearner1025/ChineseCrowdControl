@@ -33,9 +33,24 @@ export class CollisionSystem {
     static _bodyTypes = new WeakMap()
 
     /**
+     * Map: CANNON.Body -> collision listener function (for cleanup)
+     */
+    static _bodyListeners = new WeakMap()
+
+    /**
+     * Map: three.js Object3D -> debug visualization mesh
+     */
+    static _debugMeshes = new WeakMap()
+
+    /**
      * Damage cooldown tracking: controller -> last damage time
      */
     static _damageCooldowns = new Map()
+
+    /**
+     * Collision damage cooldown in milliseconds
+     */
+    static _cooldownMs = 300
 
     /**
      * Create or get physics body for an entity
@@ -58,7 +73,7 @@ export class CollisionSystem {
 
         const {
             bodyType = 'dynamic',  // 'dynamic' or 'kinematic'
-            shapeType = 'sphere',  // 'sphere' or 'box'
+            shapeType = 'box',  // 'sphere' or 'box'
             shapeSize = null,
             mass = controller.mass || 1.0,
             friction = 0.4,
@@ -81,6 +96,8 @@ export class CollisionSystem {
             yOffset = radius  // Offset sphere so bottom touches ground
         }
 
+        const collisionGroup = this._getCollisionGroup(controller)
+        const collisionMask = this._getCollisionMask(controller)
         // Create physics body - cannon-es will simulate this
         body = new CANNON.Body({
             mass: mass,
@@ -92,8 +109,11 @@ export class CollisionSystem {
             linearDamping: linearDamping,
             angularDamping: angularDamping,
             // fixedRotation: true, // Prevent tipping over
-            collisionFilterGroup: this._getCollisionGroup(controller),
-            collisionFilterMask: this._getCollisionMask(controller)
+            collisionFilterGroup: collisionGroup,
+            collisionFilterMask: collisionMask,
+            // CRITICAL: Disable sleeping for combat entities!
+            // Sleeping bodies don't fire collision events, making them "invulnerable"
+            allowSleep: false
         })
 
         // Set body type (dynamic or kinematic)
@@ -123,6 +143,45 @@ export class CollisionSystem {
         this._bodyToController.set(body, controller)
         this._bodyTypes.set(body, bodyType)
 
+        // Setup collision listener on this body
+        const listener = (event) => {
+            this._handleCollision(body, event)
+        }
+        body.addEventListener('collide', listener)
+        this._bodyListeners.set(body, listener)
+
+        const controllerType = controller.constructor.ComponentType || controller.constructor.name
+        // Create debug visualization for box shapes
+        if (shapeType === 'box') {
+            const {width, height, depth} = shapeSize || {width: 2, height: 2, depth: 2}
+            const geometry = new THREE.BoxGeometry(width, height, depth)
+            const edges = new THREE.EdgesGeometry(geometry)
+            const material = new THREE.LineBasicMaterial({color: 0x00ff00, linewidth: 2})
+            const wireframe = new THREE.LineSegments(edges, material)
+
+            // Position at object's world position (updated in syncBodyToObject)
+            wireframe.position.copy(object.position)
+            wireframe.position.y = yOffset  // Offset for box center
+            wireframe.name = 'CollisionDebugBox_' + object.name
+
+            // Add to scene instead of object so it stays visible even if parent is hidden
+            // (HumanoidAnimationComponent hides the mesh, which would hide children too)
+            const scene = controller.ctx?.viewer?.scene || object.parent
+            if (scene) {
+                scene.add(wireframe)
+                console.log(`[CollisionSystem] Create bbox for ${controllerType} - added to scene`)
+            } else {
+                // Fallback: add to object if no scene available
+                object.add(wireframe)
+                console.log(`[CollisionSystem] Create bbox for ${controllerType} - added to object (no scene)`)
+            }
+
+            this._debugMeshes.set(object, wireframe)
+        }
+
+        console.log(`[CollisionSystem] Created body for ${controllerType} at (${object.position.x.toFixed(1)}, ${object.position.z.toFixed(1)}) - Group: ${collisionGroup}, Mask: ${collisionMask}, Mass: ${mass}, Type: ${bodyType}`)
+        console.log(`[CollisionSystem] World now has ${world.bodies.length} bodies`)
+
         return body
     }
 
@@ -138,29 +197,31 @@ export class CollisionSystem {
 
         // Enemies and Crowd are in same group (both hostile to player/friendlies)
         if (type === 'Enemy' || type === 'CrowdMember') {
-            return 1 << 0  // Group 0: Enemies + Crowd
+            return 1 << 0  // Bit 0 = value 1: Enemies + Crowd
         }
         // Player
         if (type === 'PlayerController') {
-            return 1 << 1  // Group 1: Player
+            return 1 << 1  // Bit 1 = value 2: Player
         }
         // Friendly units
         if (type === 'RobotTireController' || type === 'FriendlyUnitData') {
-            return 1 << 2  // Group 2: Friendlies
+            return 1 << 2  // Bit 2 = value 4: Friendlies
         }
-        return 1 << 3  // Group 3: Other
+        return 1 << 3  // Bit 3 = value 8: Other
     }
 
     static _getCollisionMask(controller) {
         const type = controller.constructor.ComponentType || controller.constructor.name
 
-        // Enemies + Crowd: collide with player, friendlies, AND other enemies/crowd (for realistic crowding)
+        // Enemies + Crowd: collide with player, friendlies, other enemies/crowd, AND buildings
         if (type === 'Enemy' || type === 'CrowdMember') {
-            return (1 << 0) | (1 << 1) | (1 << 2)  // Collide with enemies+crowd, player, friendlies
+            const mask = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 4)  // enemies(1), player(2), friendlies(4), buildings(16) = 23
+            return mask
         }
-        // Player/friendlies: collide with enemies + crowd
+        // Player/friendlies: collide with enemies + crowd + buildings
         if (type === 'PlayerController' || type === 'RobotTireController' || type === 'FriendlyUnitData') {
-            return (1 << 0)  // Collide with enemies+crowd group
+            const mask = (1 << 0) | (1 << 4)  // enemies+crowd(1), buildings(16) = 17
+            return mask
         }
         return 0xffffffff  // Other: collide with everything
     }
@@ -171,9 +232,27 @@ export class CollisionSystem {
     static removeBody(object, world) {
         const body = this._entityBodies.get(object)
         if (body && world) {
+            // Remove collision listener
+            const listener = this._bodyListeners.get(body)
+            if (listener) {
+                body.removeEventListener('collide', listener)
+                this._bodyListeners.delete(body)
+            }
+
+            // Remove debug visualization
+            const debugMesh = this._debugMeshes.get(object)
+            if (debugMesh) {
+                // Remove from parent (either scene or object)
+                debugMesh.parent?.remove(debugMesh)
+                debugMesh.geometry?.dispose()
+                debugMesh.material?.dispose()
+                this._debugMeshes.delete(object)
+            }
+
             world.removeBody(body)
             this._entityBodies.delete(object)
             this._bodyToController.delete(body)
+            this._bodyTypes.delete(body)
         }
     }
 
@@ -234,13 +313,44 @@ export class CollisionSystem {
         object.position.x = body.position.x
         object.position.z = body.position.z
 
-        // FIXED: Read Y from body, but clamp to ground level
+        // For ground-based units, constrain physics body to ground plane
+        // This prevents Y velocity accumulation from collisions causing jumpiness
+        const controllerType = controller.constructor?.ComponentType
+        const isGroundUnit = controllerType === 'RobotTireController' ||
+                            controllerType === 'Enemy' ||
+                            controllerType === 'CrowdMember' ||
+                            controllerType === 'FriendlyUnitData'
+
+        if (isGroundUnit) {
+            // Get Y offset based on shape (to keep bottom at ground level)
+            const shape = body.shapes[0]
+            let yOffset = 0
+            if (shape?.radius) yOffset = shape.radius
+            else if (shape?.halfExtents) yOffset = shape.halfExtents.y
+
+            // Constrain physics body to ground - kills Y bounce at the source
+            body.position.y = yOffset
+            body.velocity.y = 0
+        }
+
+        // Read Y from body, but clamp to ground level
         object.position.y = Math.max(0, body.position.y)
 
         // Update controller velocity (for both types)
         if (controller._velocity) {
             controller._velocity.x = body.velocity.x
             controller._velocity.z = body.velocity.z
+        }
+
+        // Update debug wireframe position even if parent is hidden
+        const debugMesh = this._debugMeshes.get(object)
+        if (debugMesh) {
+            // Ensure wireframe is always visible (for debugging)
+            // This is important because HumanoidAnimationComponent hides the parent mesh
+            debugMesh.visible = true
+
+            // Update world position to match physics body
+            debugMesh.position.copy(object.position)
         }
     }
 
@@ -261,22 +371,42 @@ export class CollisionSystem {
         else {
             body.velocity = acc
         }
-
     }
 
     /**
-     * Setup collision damage using cannon-es collision events
-     * Damage is calculated from collision impulse (force of impact)
+     * Handle collision event for a single body
+     * Called when a body collides with another body
+     *
+     * @param {CANNON.Body} bodyA - The body this listener is attached to
+     * @param {Object} event - Collision event from cannon-es
      */
-    static setupCollisionDamage(world, cooldownMs = 300) {
-        world.addEventListener('collide', (event) => {
-            const {body: bodyA, target: bodyB, contact} = event
+    static _handleCollision(bodyA, event) {
+        try {
+            const {body: bodyB, contact} = event
 
             const controllerA = this._bodyToController.get(bodyA)
             const controllerB = this._bodyToController.get(bodyB)
 
-            if (!controllerA || !controllerB) return
-            if (!controllerA.isAlive || !controllerB.isAlive) return
+            if (!controllerA || !controllerB) {
+                return
+            }
+
+            const typeA = controllerA.constructor?.ComponentType || 'Unknown'
+            const typeB = controllerB.constructor?.ComponentType || 'Unknown'
+
+            // Debug: log all combat-relevant collisions
+            const isCombatCollision =
+                (typeA === 'CrowdMember' || typeB === 'CrowdMember') &&
+                (typeA === 'RobotTireController' || typeB === 'RobotTireController' ||
+                 typeA === 'PlayerController' || typeB === 'PlayerController')
+
+            if (isCombatCollision) {
+                console.log(`[CollisionSystem] Combat collision: ${typeA} <-> ${typeB}`)
+            }
+
+            if (!controllerA.isAlive || !controllerB.isAlive) {
+                return
+            }
 
             // Get impulse from cannon-es contact
             // Impulse = force * time, represents the strength of collision
@@ -293,12 +423,15 @@ export class CollisionSystem {
                 const relVel = new CANNON.Vec3()
                 bodyB.velocity.vsub(bodyA.velocity, relVel)
                 impulse = relVel.length() * ((bodyA.mass + bodyB.mass) / 2)
-            }
+        }
 
             // Apply damage based on impulse
             const now = Date.now()
-            this._applyImpulseDamage(controllerA, controllerB, impulse, cooldownMs, now)
-        })
+            console.log(`[CollisionSystem] Collision impulse: ${impulse.toFixed(2)}`)
+            this._applyImpulseDamage(controllerA, controllerB, impulse, this._cooldownMs, now)
+        } catch (error) {
+            console.error('[CollisionSystem] Error in collision listener:', error)
+        }
     }
 
     /**
@@ -314,14 +447,12 @@ export class CollisionSystem {
         let victim = null
 
         // Enemy -> Player/Friendly
-        if (typeA === 'Enemy' &&
-            (typeB === 'PlayerController' || typeB === 'RobotTireController' || typeB === 'FriendlyUnitData')) {
+        if ((typeB === 'PlayerController' || typeB === 'RobotTireController' || typeB === 'FriendlyUnitData')) {
             attacker = controllerA
             victim = controllerB
         }
         // Player/Friendly -> Enemy
-        else if ((typeA === 'PlayerController'  || typeA === 'RobotTireController' || typeA === 'FriendlyUnitData') &&
-                 typeB === 'Enemy') {
+        else if ((typeA === 'PlayerController'  || typeA === 'RobotTireController' || typeA === 'FriendlyUnitData')) {
             attacker = controllerA
             victim = controllerB
         }
@@ -342,6 +473,9 @@ export class CollisionSystem {
 
                 // Apply damage
                 if (typeof victim.takeDamage === 'function') {
+                    const attackerName = attacker.object?.name || attacker.mesh?.name || typeA
+                    const victimName = victim.object?.name || victim.mesh?.name || typeB
+                    console.log(`[CollisionSystem] ${attackerName} (${typeA}) hit ${victimName} (${typeB}) for ${damage.toFixed(1)} damage`)
                     victim.takeDamage(damage, attacker)
                     this._damageCooldowns.set(victim, now)
                 }
@@ -361,10 +495,12 @@ export class CollisionSystem {
         // Iterate through all bodies in the physics world
         for (const body of world.bodies) {
             const controller = this._bodyToController.get(body)
-            if (!controller || !controller.object) continue
+            // Support both .object (components) and .mesh (data classes like CrowdMember)
+            const obj = controller?.object || controller?.mesh
+            if (!controller || !obj) continue
 
             // Sync physics results to visual object
-            this.syncBodyToObject(controller.object, controller, body)
+            this.syncBodyToObject(obj, controller, body)
         }
     }
 

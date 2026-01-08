@@ -2,6 +2,7 @@ import {Object3DComponent, EntityComponentPlugin} from 'threepipe'
 import * as THREE from 'three'
 import {CollisionSystem} from './CollisionSystem.js'
 import {getPhysicsWorldManager} from './PhysicsWorldController.script.js'
+import {RagdollComponent} from './RagdollComponent.script.js'
 
 /**
  * Enemy - Plain class holding enemy unit data (NOT a component)
@@ -242,6 +243,13 @@ export class EnemySystemManager extends Object3DComponent {
         }
         this._physicsWorld = physicsManager.world
 
+        // Initialize blood texture at game start (before any blood appears)
+        // This ensures the transparent texture is applied to the plane immediately
+        const scene = this.ctx?.viewer?.scene
+        if (scene) {
+            RagdollComponent.initializeBloodTextureStatic(scene)
+        }
+
         this._findPlayer()
         this._findCityHall()
         this._initialized = true
@@ -257,6 +265,9 @@ export class EnemySystemManager extends Object3DComponent {
 
         this._enemies = []
         this._initialized = false
+
+        // Cleanup blood texture static state so it reinitializes on next game start
+        RagdollComponent.cleanupBloodTextureStatic()
     }
 
     /**
@@ -293,8 +304,8 @@ export class EnemySystemManager extends Object3DComponent {
             this._physicsWorld,
             {
                 bodyType: 'dynamic',  // Fully physics-controlled
-                shapeType: 'sphere',
-                shapeSize: { radius: enemy.collisionRadius },
+                shapeType: 'box',
+                shapeSize: { width:1, height: 1, depth: 1  },
                 mass: enemy.mass,
                 friction: 0.8,
                 restitution: 0.3,

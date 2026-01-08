@@ -1,1 +1,11 @@
-{"files":{},"version":1}
+{
+  "files": {
+    "d4aefa24-3443-4fc7-80e8-46c8001c6275": {
+      "path": "assets/assets.json"
+    },
+    "ec9681cb-bb75-4560-b4fa-329110057679": {
+      "path": "assets/package.json"
+    }
+  },
+  "version": 1
+}
