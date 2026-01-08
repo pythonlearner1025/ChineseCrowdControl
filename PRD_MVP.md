@@ -4,7 +4,6 @@
 A top-down tactical defense game where you **survive 3 nights** of swarming crowd attacks by commanding police units and **driving a Robot Tire to ram through enemies**. Build economy during day, make fast tactical decisions during night. Economics is easy—executing risky maneuvers without getting overwhelmed is not.
 
 **Core Loop:** Build during day → Defend during night → Survive 3 nights to win
-
 **Core Reward:** Good economic decisions → Upgrade Robot Tire → Massive satisfying crowd damage
 
 ---
@@ -18,8 +17,7 @@ A top-down tactical defense game where you **survive 3 nights** of swarming crow
   - ES6 modules (`import`/`export`)
   - Scene designed in Kite Editor, exported as `.scene.glb`
 - **Unit system:** three.js world units (1 unit = 1 meter)
-  - World is a **grid** of tiles; **1 tile = 1 world unit**
-- **Pathfinding:** Enemies use **A\*** on tile grid (4-directional) toward targets, re-path when blocked
+- **Pathfinding:** Enemies move directly toward targets (simple steering), re-path when blocked
 - **Pattern:** Manager/System pattern for entities (EnemySystemComponent, UnitSystemComponent, etc.)
 
 ---
@@ -30,7 +28,6 @@ A top-down tactical defense game where you **survive 3 nights** of swarming crow
 - **Zoom:** Adjusts orthographic size (mouse wheel)
 - **Background:**
   - Ground plane mesh with dark asphalt material (#0E1116)
-  - Grid lines via line segments (10% opacity, #2A3340)
   - At night: add vignette effect
 
 ---
@@ -47,7 +44,6 @@ A top-down tactical defense game where you **survive 3 nights** of swarming crow
 
 ### Color Palette
 - Background asphalt: **#0E1116**
-- Tile grid line: **#2A3340**
 - City Hall (core): **#D8E2F0**
 - Money generator: **#FFD166**
 - Police units: **#2EC4B6**
@@ -93,8 +89,7 @@ A top-down tactical defense game where you **survive 3 nights** of swarming crow
 
 | Property | Value | Unit |
 |---|---:|---|
-| Tile size | 1.0 | world units |
-| Map size (default) | 40×22 | tiles (world units) |
+| Map size (default) | 40×22 | world units |
 | Police move speed | 3.0 | units/sec |
 | FPV move speed | 6.9 | units/sec |
 | Robot Tire max speed | 8.0 | units/sec |
@@ -104,7 +99,7 @@ A top-down tactical defense game where you **survive 3 nights** of swarming crow
 | Night duration | Variable | ends when all enemies defeated |
 
 **Time control:**
-- Day ↔ Night transition: **player-triggered by holding Space** (0.6s hold)
+- Day ↔ Night transition: **player-triggered by holding Space** (5s hold)
   - Minimum day time before switching: **3 sec**
   - Night ends automatically when all spawned enemies are defeated
 
@@ -127,7 +122,7 @@ A top-down tactical defense game where you **survive 3 nights** of swarming crow
 
 **Target Priority (AI):**
 1. Enemies attacking City Hall
-2. Enemies within 3 tiles of any resource generator
+2. Enemies within 3 units of any resource generator
 3. Nearest enemy to their current position
 
 **Architecture:**
@@ -139,7 +134,7 @@ A top-down tactical defense game where you **survive 3 nights** of swarming crow
 - **Night 1:** 20 crowds
 - **Night 2:** 35 crowds
 - **Night 3:** 50 crowds
-- Spawn at map edges (designated "entry tiles"), configurable in `EnemySystemComponent.nightWaves` StateProperty
+- Spawn at map edges (designated spawn points), configurable in `EnemySystemComponent.nightWaves` StateProperty
 - Example: `{type: 'crowd', count: 20, intervalSec: 1.0, entry: 'randomEdge', delaySec: 0, ai: 'toCityHall'}`
 
 ---
@@ -155,10 +150,10 @@ A top-down tactical defense game where you **survive 3 nights** of swarming crow
 |---|---|---|
 | Left Click | Select unit/building | Raycast to find clicked Object3D |
 | Left Click + Drag | Drag-select multiple units | Draw selection box, collect units in box |
-| Right Click | Give unit order (move+attack) | Check grid, path units to location |
+| Right Click | Give unit order (move+attack) | Path units to location |
 | Shift + Right Click | Give unit hold order (move+hold) | Path units, set hold radius |
 | Click Robot Tire + Hold | Tire accelerates toward mouse | Track mouse position, apply acceleration vector |
-| Left Click (empty, day) | Place building | Check grid occupancy, spawn Object3D if affordable |
+| Left Click (empty, day) | Place building | Check placement validity, spawn Object3D if affordable |
 | Right Click + Drag | Pan camera | Update camera position |
 | Mouse Wheel | Zoom in/out (0.8× to 1.4×) | Adjust orthographic camera size |
 | Space (hold 0.6s) | Toggle Day ↔ Night | Track hold time, trigger transition |
@@ -294,30 +289,25 @@ NONE
 
 #### City Hall (Core)
 - **Mesh:** Large box (3×1×3) with #D8E2F0 material
-- **Size:** 3×3 tiles
 - **HP:** 1000
 - **Passive:** +$10/sec baseline
 - **Cannot be sold or destroyed by player**
 
 #### Money Generator
 - **Mesh:** Box (2×1×2) with #FFD166 material
-- **Size:** 2×2 tiles
 - **HP:** 400
 - **Output:** +$100/night
 - **Cost:** $100
 - **Build during day only**
 
-#### Tire Repair Center
-- **Mesh:** Box (2×0.8×2) with #6C757D material
-- **Size:** 2×2 tiles
-- **HP:** 300
-- **Function:** Player can click during day to repair/recharge Robot Tire
-- **Cost to build:** $150
-- **Repair/recharge cost:** Scales with player balance (e.g., 10% of current money, minimum $50)
-- **Effect:** Restores Robot Tire HP to full, removes "used" state if applicable
+#### Barricade
+- **Mesh:** Wall (1×1×2) with #808080 material
+- **HP:** 500
+- **Passive:** Blocks enemy movement
+- **Build during day only**
 
 ### Building Placement
-- **Grid-based:** Buildings snap to designated sites 
+- **Free placement:** Buildings placed at mouse position (user manually ensures spacing)
 - **Preview:** Ghost mesh at mouse position (green if valid, red if invalid)
 - **Day only:** Building placement disabled during night
 
@@ -341,7 +331,7 @@ NONE
 - **Role:** Generalist defense, holds positions
 - **Commands:**
   - Move + Auto-attack (default): paths to location, engages enemies in range
-  - Move + Hold (Shift+right-click): paths to location, only attacks within 2-tile radius
+  - Move + Hold (Shift+right-click): paths to location, only attacks within 2 unit radius
 
 ### FPV Drone
 - **Mesh:** Small sphere (radius 0.2) with blue emissive glow
@@ -373,9 +363,9 @@ NONE
 Implemented in `UnitSystemComponent.update()`:
 - **Target priority:**
   1. Enemies attacking City Hall
-  2. Enemies within 3 tiles of any Money Generator
+  2. Enemies within 3 units of any Money Generator
   3. Nearest enemy
-- **Chase limit:** Units do not chase beyond 10 tiles from their order position (prevents kiting across map)
+- **Chase limit:** Units do not chase beyond 10 units from their order position (prevents kiting across map)
 
 ---
 
@@ -403,8 +393,7 @@ Implemented in `UnitSystemComponent.update()`:
 ### Map Layout
 - **Ground plane:** PlaneGeometry (40×22 world units) with asphalt material
 - **City Hall** at center (world origin 0,0,0)
-- **Grid lines:** LineSegments overlaid on ground plane
-- **Enemy spawn points:** 8-12 designated edge tiles (N, S, E, W sides of map)
+- **Enemy spawn points:** 8-12 designated edge positions (N, S, E, W sides of map)
 
 ### Day/Night Lighting
 - **Day mode:**
@@ -464,7 +453,7 @@ Implemented in `UnitSystemComponent.update()`:
 - [ ] Robot Tire collision with crowds deals massive damage (150-200)
 - [ ] **Unit commands:** Select units, right-click for move+attack, shift+right-click for move+hold
 - [ ] Police and FPV units follow orders and auto-engage based on priority
-- [ ] Enemies use **A\*** pathfinding toward City Hall with target priority
+- [ ] Enemies move toward City Hall with target priority
 - [ ] **Enemy spawn scaling:** Night 1 = 20, Night 2 = 35, Night 3 = 50 crowds
 
 ### Combat Feel (PRIORITY)
@@ -499,7 +488,6 @@ Organize code into these `.script.js` files:
 **Core Systems:**
 - `GameManager.script.js` - Game state, money, day/night cycle, victory/loss
 - `InputManager.script.js` - Mouse/keyboard input, raycasting, unit selection, tire control
-- `MapManager.script.js` - Grid occupancy, tile data
 
 **Entity Systems:**
 - `EnemySystem.script.js` - Spawns and updates all enemies, wave config
@@ -511,7 +499,6 @@ Organize code into these `.script.js` files:
 
 **Gameplay:**
 - `CombatSystem.script.js` - Damage, collision detection, health management
-- `PathfindingHelper.script.js` - A\* implementation, path caching
 - `RobotTireController.script.js` - Tire-specific control logic, acceleration toward mouse
 
 **Gore & Effects:**
@@ -529,14 +516,14 @@ Organize code into these `.script.js` files:
 ## 19. Implementation Priority Order
 
 ### Phase 1: Core Loop (Week 1)
-1. Basic map, grid, City Hall placement
+1. Basic map, City Hall placement
 2. Day/night state transitions (Space hold)
 3. Money system + Money Generator building
 4. Simple HUD (money counter, night counter)
 
 ### Phase 2: Basic Combat (Week 2)
 1. Enemy spawn system (crowds only, simple spawn)
-2. Enemy A\* pathfinding to City Hall
+2. Enemy movement toward City Hall
 3. Police unit placement + basic auto-attack
 4. Health bars, damage system
 5. City Hall destruction → Game Over

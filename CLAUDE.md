@@ -1,5 +1,6 @@
 # Notes for Kite and threepipe Game Development
 
+- When using getViewportScreenshot, specify output path of image to assets/screenshots
 - The game is using kite game engine built on top of threepipe and three.js.
 - Scenes in the game are designed in a UI editor(similar to Unity/Godot) and exported as .scene.glb files. These are binary files and cannot be read or edited as text
 - The game dependencies, packages, scripts etc are defined in the package.json file in the game project. Any script or dependency required in the scene or the editor must be added to package.json
@@ -13,6 +14,7 @@
 - The game uses ES6 modules, so use `import` and `export` statements for modularity.
 - When editing files with the editor open, the changes are hot-reloaded automatically on file save. It is necessary to ensure that all resources and event listeners are properly cleaned up in the `destroy()`(or `stop()`) method of components to prevent memory leaks during hot-reloading.
 - Some sample components and plugins can be found at the end of this file and in `.kite/samples` folder with names ending with `.script.js`. 
+- Models in the projects `assets` folder can be loaded with the base path `/kite/assets/`. E.g. `/kite/assets/enemy.glb`
 - kite3d supports two types of code files:
 
 ## .script.js Files (Components)
@@ -233,6 +235,7 @@ class RigidBodyComponent extends Object3DComponent {
 - Use three.js Raycaster for picking/collision: `new THREE.Raycaster()`
 - For simple collision, check bounding boxes: `box1.intersectsBox(box2)`
 - Consider using a physics plugin for complex collision needs, check plugins or other components in the project that might use physics already.
+- **Physics body sync rule:** Always sync physics body → mesh position every frame, even during early returns. If body and mesh positions desync, collisions happen at body position while visuals stay at mesh position, making entities appear invulnerable.
 
 ## Performance Tips
 - Cache component references in `start()` instead of fetching every frame

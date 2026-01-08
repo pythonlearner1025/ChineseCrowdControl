@@ -10,7 +10,7 @@ export class PlayerController extends Object3DComponent {
     static StateProperties = [
         'running', 'speed', 'health', 'maxHealth', 'armor',
         'attackRange', 'damage', 'attackFrequency', 'invulnerabilityTime',
-        'mass', 'friction', 'healthRegen'
+        'mass', 'friction', 'healthRegen', 'modelScale'
     ]
     static ComponentType = 'PlayerController'
 
@@ -18,11 +18,11 @@ export class PlayerController extends Object3DComponent {
     speed = 10 // units per second (max speed)
 
     // Combat attributes
-    health = 50
+    health = 100
     maxHealth = 100
     armor = 1
     attackRange = 20      // ranged attack distance
-    damage = 25
+    damage = 0
     attackFrequency = 2   // attacks per second
     invulnerabilityTime = 0.5 // seconds of invulnerability after being hit
     healthRegen = 0.10    // 10% of max health per second
@@ -30,6 +30,9 @@ export class PlayerController extends Object3DComponent {
     // Physics attributes
     mass = 0.5            // low mass = snappy direction changes
     friction = 20         // high friction = sharp turns, minimal drift
+
+    // Model settings
+    modelScale = 0.01     // FBX models are often large, scale down
 
     // Cannon-es physics integration
     _physicsBody = null   // CANNON.Body
@@ -41,7 +44,7 @@ export class PlayerController extends Object3DComponent {
 
     // Collision damage settings
     collisionRadius = 1.2         // how close entities must be to deal collision damage
-    collisionDamageCooldown = 300 // ms between collision damage from same source
+    collisionDamageCooldown = 0 // ms between collision damage from same source
     _collisionCooldowns = null    // Map of entity -> last damage time
 
     // Physics state
@@ -53,6 +56,13 @@ export class PlayerController extends Object3DComponent {
     _healthBarFill = null
     _healthBarBg = null
 
+    // Animation
+    _mixer = null           // THREE.AnimationMixer
+    _walkAction = null      // Walking animation action
+    _loadedModel = null     // Reference to loaded model
+    _isWalking = false      // Track if currently walking
+    _originalMaterial = null // Store original material for cleanup
+
     // Internal movement state
     keys = {
         w: false,
@@ -61,7 +71,7 @@ export class PlayerController extends Object3DComponent {
         d: false
     }
 
-    start() {
+    async start() {
         if (super.start) super.start()
         this._handleKeyDown = this._handleKeyDown.bind(this)
         this._handleKeyUp = this._handleKeyUp.bind(this)
@@ -78,8 +88,93 @@ export class PlayerController extends Object3DComponent {
         // Create health bar
         this._createHealthBar()
 
+        // Load the player model and animation
+        await this._loadPlayerModel()
+
         // Create cannon-es physics body
         this._initializeCannonPhysics()
+    }
+
+    async _loadPlayerModel() {
+        const viewer = this.ctx?.viewer
+        if (!viewer) {
+            console.error('[PlayerController] No viewer found')
+            return
+        }
+
+        try {
+            // Hide original mesh - just make the material transparent or hide the mesh itself
+            if (this.object.isMesh && this.object.material) {
+                this._originalMaterial = this.object.material
+                this.object.material = new THREE.MeshBasicMaterial({ visible: false })
+            }
+
+            console.log('[PlayerController] Loading police model...')
+
+            // Use import() to load without auto-adding to scene
+            const model = await viewer.import('/kite/assets/models/police_model.fbx')
+            if (!model) {
+                console.error('[PlayerController] Failed to load police model')
+                return
+            }
+
+            console.log('[PlayerController] Model loaded:', model)
+
+            // Remove from scene if viewer.import added it
+            if (model.parent) {
+                model.parent.remove(model)
+            }
+
+            // Keep original FBX materials (textures are embedded in the FBX file)
+            model.traverse((child) => {
+                if (child.isMesh || child.isSkinnedMesh) {
+                    child.castShadow = true
+                    child.receiveShadow = true
+                }
+            })
+
+            // Scale and position the model
+            model.scale.setScalar(this.modelScale)
+            model.position.set(0, -0.5, 0) // Offset to ground level
+
+            // Add model as child of player object
+            this._loadedModel = model
+            this.object.add(model)
+
+            console.log('[PlayerController] Model added to player, loading animation...')
+
+            // Load walking animation
+            const walkAnimData = await viewer.import('/kite/assets/models/walking_animation.fbx')
+            console.log('[PlayerController] Animation data loaded:', walkAnimData)
+
+            if (walkAnimData) {
+                // Remove from scene if added
+                if (walkAnimData.parent) {
+                    walkAnimData.parent.remove(walkAnimData)
+                }
+
+                // Check for animations on the loaded object or its root
+                const animations = walkAnimData.animations || []
+                console.log('[PlayerController] Found animations:', animations.length)
+
+                if (animations.length > 0) {
+                    // Create mixer on the loaded model
+                    this._mixer = new THREE.AnimationMixer(model)
+
+                    // Get the first animation clip
+                    const walkClip = animations[0]
+                    this._walkAction = this._mixer.clipAction(walkClip)
+                    this._walkAction.setLoop(THREE.LoopRepeat)
+
+                    console.log('[PlayerController] Model and walking animation loaded successfully')
+                } else {
+                    console.warn('[PlayerController] No animations found in walking_animation.fbx')
+                }
+            }
+
+        } catch (error) {
+            console.error('[PlayerController] Error loading model:', error)
+        }
     }
 
     _initializeCannonPhysics() {
@@ -97,8 +192,8 @@ export class PlayerController extends Object3DComponent {
             this._physicsWorld,
             {
                 bodyType: 'dynamic',  // Fully physics-controlled
-                shapeType: 'sphere',
-                shapeSize: { radius: this.collisionRadius * 0.5 },
+                shapeType: 'box',
+                shapeSize: { width:1, height: 1, depth: 1  },
                 mass: this.mass,
                 friction: 0.8,
                 restitution: 0.3,
@@ -116,6 +211,35 @@ export class PlayerController extends Object3DComponent {
 
         // Cleanup health bar
         this._removeHealthBar()
+
+        // Cleanup animation
+        if (this._mixer) {
+            this._mixer.stopAllAction()
+            this._mixer = null
+        }
+        this._walkAction = null
+
+        // Cleanup loaded model
+        if (this._loadedModel) {
+            this.object.remove(this._loadedModel)
+            this._loadedModel.traverse((child) => {
+                if (child.geometry) child.geometry.dispose()
+                if (child.material) {
+                    if (Array.isArray(child.material)) {
+                        child.material.forEach(m => m.dispose())
+                    } else {
+                        child.material.dispose()
+                    }
+                }
+            })
+            this._loadedModel = null
+        }
+
+        // Restore original material
+        if (this._originalMaterial && this.object.isMesh) {
+            this.object.material = this._originalMaterial
+            this._originalMaterial = null
+        }
 
         // Cleanup cannon-es physics body
         if (this._physicsBody && this._physicsWorld) {
@@ -257,6 +381,10 @@ export class PlayerController extends Object3DComponent {
             }
 
             if (!this.running || !this.isAlive) {
+                // Still update animation mixer when paused
+                if (this._mixer) {
+                    this._mixer.update(dt)
+                }
                 // Still sync physics when not running (apply friction)
                 if (this._physicsBody) {
                     CollisionSystem.syncObjectToBody(this.object, this, this._physicsBody)
@@ -282,6 +410,30 @@ export class PlayerController extends Object3DComponent {
             if (inputMag > 0) {
                 inputX /= inputMag
                 inputZ /= inputMag
+            }
+
+            // Update animation mixer
+            if (this._mixer) {
+                this._mixer.update(dt)
+            }
+
+            // Handle walking animation play/stop
+            const isMoving = inputMag > 0
+            if (this._walkAction) {
+                if (isMoving && !this._isWalking) {
+                    this._walkAction.reset()
+                    this._walkAction.play()
+                    this._isWalking = true
+                } else if (!isMoving && this._isWalking) {
+                    this._walkAction.fadeOut(0.2)
+                    this._isWalking = false
+                }
+            }
+
+            // Rotate model to face movement direction
+            if (isMoving && this._loadedModel) {
+                const targetAngle = Math.atan2(inputX, inputZ)
+                this._loadedModel.rotation.y = targetAngle
             }
 
             // === CANNON-ES PHYSICS MODE ===

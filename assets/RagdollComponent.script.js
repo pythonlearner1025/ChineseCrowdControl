@@ -61,13 +61,33 @@ export class RagdollComponent extends Object3DComponent {
         this.cleanup()
     }
 
-    _initializeBloodTexture() {
+    /**
+     * Static initialization method - can be called from any component with a scene reference
+     * Call this at game start to ensure the transparent texture is applied to the plane immediately
+     */
+    static initializeBloodTextureStatic(scene) {
         // Only initialize once (class-level)
         if (RagdollComponent._bloodCanvas) return
 
-        const scene = this.ctx?.viewer?.scene
         if (!scene) return
 
+        RagdollComponent._initializeBloodTextureInternal(scene)
+    }
+
+    /**
+     * Static cleanup method - call when game stops to reset state for next session
+     */
+    static cleanupBloodTextureStatic() {
+        if (RagdollComponent._bloodTexture) {
+            RagdollComponent._bloodTexture.dispose()
+        }
+        RagdollComponent._bloodCanvas = null
+        RagdollComponent._bloodContext = null
+        RagdollComponent._bloodTexture = null
+        RagdollComponent._groundPlane = null
+    }
+
+    static _initializeBloodTextureInternal(scene) {
         // Find the plane object in the scene
         let plane = null
         scene.traverse((obj) => {
@@ -88,23 +108,16 @@ export class RagdollComponent extends Object3DComponent {
         let planeHeight = 100
 
         if (plane.geometry) {
-            //console.log('[BLOOD DEBUG] === PLANE GEOMETRY DETECTION ===')
-            //console.log('[BLOOD DEBUG] geometry.userData:', plane.geometry.userData)
-            //console.log('[BLOOD DEBUG] geometry.parameters:', plane.geometry.parameters)
-
             // Method 1: Check userData.generationParams (custom plane from editor)
             if (plane.geometry.userData?.generationParams) {
                 const params = plane.geometry.userData.generationParams
-                //console.log('[BLOOD DEBUG] Using generationParams:', params)
                 planeWidth = params.width || params.size || 100
                 planeHeight = params.height || params.depth || params.size || 100
-                //console.log('[BLOOD DEBUG] Extracted width:', planeWidth, 'height:', planeHeight)
             }
             // Method 2: Check standard parameters
             else if (plane.geometry.parameters) {
                 planeWidth = plane.geometry.parameters.width || 100
                 planeHeight = plane.geometry.parameters.height || 100
-                //console.log('[BLOOD DEBUG] Using parameters - width:', planeWidth, 'height:', planeHeight)
             }
             // Method 3: Use bounding box
             else {
@@ -113,42 +126,28 @@ export class RagdollComponent extends Object3DComponent {
                 }
                 const bbox = plane.geometry.boundingBox
                 if (bbox) {
-                    //console.log('[BLOOD DEBUG] Using bbox - min:', bbox.min, 'max:', bbox.max)
-                    // For a plane lying flat (XZ plane), use X and Z dimensions
                     planeWidth = Math.abs(bbox.max.x - bbox.min.x)
                     planeHeight = Math.abs(bbox.max.z - bbox.min.z)
-                    //console.log('[BLOOD DEBUG] Calculated from bbox - width(X):', planeWidth, 'height(Z):', planeHeight)
 
                     // If plane is upright (XY plane), use X and Y
                     if (planeHeight < 0.01) {
                         planeHeight = Math.abs(bbox.max.y - bbox.min.y)
-                        //console.log('[BLOOD DEBUG] Plane is upright, using Y:', planeHeight)
                     }
                 }
             }
         }
 
         // Apply scale
-        //console.log('[BLOOD DEBUG] Plane scale - x:', plane.scale.x, 'y:', plane.scale.y, 'z:', plane.scale.z)
-        //console.log('[BLOOD DEBUG] Before scale - width:', planeWidth, 'height:', planeHeight)
         planeWidth *= plane.scale.x
         planeHeight *= plane.scale.z
-        //console.log('[BLOOD DEBUG] After scale - width:', planeWidth, 'height:', planeHeight)
 
-        RagdollComponent._planeWidth = planeWidth   // Store actual width (X)
-        RagdollComponent._planeHeight = planeHeight  // Store actual height (Z)
+        RagdollComponent._planeWidth = planeWidth
+        RagdollComponent._planeHeight = planeHeight
 
         // Get plane center position
         const planeWorldPos = new THREE.Vector3()
         plane.getWorldPosition(planeWorldPos)
         RagdollComponent._planeCenter = { x: planeWorldPos.x, z: planeWorldPos.z }
-
-        //console.log('[BLOOD DEBUG] === FINAL PLANE CONFIG ===')
-        //console.log('[BLOOD DEBUG] Plane center: (', RagdollComponent._planeCenter.x.toFixed(2), ',', RagdollComponent._planeCenter.z.toFixed(2), ')')
-        //console.log('[BLOOD DEBUG] Final plane dimensions:', planeWidth.toFixed(2), 'x', planeHeight.toFixed(2))
-        //console.log('[BLOOD DEBUG] Texture size:', RagdollComponent._textureSize)
-        //console.log('[BLOOD DEBUG] Coverage: X=[', (RagdollComponent._planeCenter.x - planeWidth/2).toFixed(1), 'to', (RagdollComponent._planeCenter.x + planeWidth/2).toFixed(1), ']')
-        //console.log('[BLOOD DEBUG] Coverage: Z=[', (RagdollComponent._planeCenter.z - planeHeight/2).toFixed(1), 'to', (RagdollComponent._planeCenter.z + planeHeight/2).toFixed(1), ']')
 
         // Create canvas for blood texture
         const canvas = document.createElement('canvas')
@@ -156,8 +155,14 @@ export class RagdollComponent extends Object3DComponent {
         canvas.height = RagdollComponent._textureSize
         const ctx = canvas.getContext('2d')
 
-        // Clear to transparent
-        ctx.clearRect(0, 0, canvas.width, canvas.height)
+        // Fill with plane's original color (preserve ground appearance)
+        let baseColor = '#888888' // Default gray ground
+        if (plane.material && plane.material.color) {
+            const c = plane.material.color
+            baseColor = `rgb(${Math.floor(c.r * 255)}, ${Math.floor(c.g * 255)}, ${Math.floor(c.b * 255)})`
+        }
+        ctx.fillStyle = baseColor
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
 
         RagdollComponent._bloodCanvas = canvas
         RagdollComponent._bloodContext = ctx
@@ -167,14 +172,24 @@ export class RagdollComponent extends Object3DComponent {
         texture.needsUpdate = true
         RagdollComponent._bloodTexture = texture
 
-        // Apply texture to plane material
+        // Apply texture to plane material (keep original color visible, blood draws on top)
         if (plane.material) {
             plane.material.map = texture
-            plane.material.transparent = true
             plane.material.needsUpdate = true
         }
 
-        //console.log('[RagdollComponent] Blood texture initialized on plane')
+        //console.log('[RagdollComponent] Blood texture initialized on plane at game start')
+    }
+
+    _initializeBloodTexture() {
+        // Only initialize once (class-level)
+        if (RagdollComponent._bloodCanvas) return
+
+        const scene = this.ctx?.viewer?.scene
+        if (!scene) return
+
+        // Use the static internal method
+        RagdollComponent._initializeBloodTextureInternal(scene)
     }
 
     /**
