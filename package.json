@@ -14,7 +14,8 @@
   ],
   "dependencies": {
     "cannon-es": "^0.20.0",
-    "threepipe": ">=0.4.2"
+    "threepipe": ">=0.4.2",
+    "@kite3d/mcp-bridge": ">=0.0.2"
   },
   "kite": {
     "plugins": [],
@@ -51,6 +52,27 @@
       },
       {
         "import": "./assets/Crowd.script.js"
+      },
+      {
+        "import": "./assets/CityHall.script.js"
+      },
+      {
+        "import": "./assets/DayNightManager.script.js"
+      },
+      {
+        "import": "./assets/MoneyCounter.script.js"
+      },
+      {
+        "import": "./assets/Barricade.script.js"
+      },
+      {
+        "import": "./assets/Road.script.js"
+      },
+      {
+        "import": "./assets/GridVisual.script.js"
+      },
+      {
+        "import": "./assets/BuildingPlacer.script.js"
       }
     ],
     "viewer": {},
