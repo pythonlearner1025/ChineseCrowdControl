@@ -1,9 +1,16 @@
 import {Object3DComponent} from 'threepipe'
 import * as THREE from 'three'
+import * as CANNON from 'cannon-es'
+import {getPhysicsWorldManager} from './PhysicsWorldController.script.js'
 
 /**
  * CityHall - Main building that must be defended
  * Loss condition when destroyed
+ *
+ * From PRD:
+ * - Mesh: Large box (3×1×3) with #D8E2F0 material
+ * - HP: 1000
+ * - Passive: +$10/sec baseline (handled by MoneyCounter)
  */
 export class CityHall extends Object3DComponent {
     static StateProperties = [
@@ -12,21 +19,21 @@ export class CityHall extends Object3DComponent {
     ]
     static ComponentType = 'CityHall'
 
-    // Health system
-    health = 7500
-    maxHealth = 7500
+    // Health system (PRD says 1000 HP)
+    health = 1000
+    maxHealth = 1000
     armor = 10
     invulnerabilityTime = 0.2 // seconds between damage
 
     // Health bar configuration
     healthBarWidth = 6.0      // large building-scale
     healthBarHeight = 0.6
-    healthBarOffset = 8.0     // height above building
+    healthBarOffset = 2.5     // height above building
 
     // Internal state
     _isAlive = true
     _lastDamageTime = 0
-    _displayedHealth = 7500
+    _displayedHealth = 1000
 
     // Health bar components
     _healthBarGroup = null
@@ -35,6 +42,12 @@ export class CityHall extends Object3DComponent {
     _healthText = null
     _textCanvas = null
     _textTexture = null
+
+    // Building geometry
+    _buildingMesh = null
+
+    // Physics body (static - blocks enemies from clipping through)
+    _physicsBody = null
 
     get isAlive() {
         return this._isAlive && this.health > 0
@@ -48,20 +61,142 @@ export class CityHall extends Object3DComponent {
     start() {
         if (super.start) super.start()
 
-        // Randomize initial health (5000-10000)
-        this.maxHealth = Math.floor(5000 + Math.random() * 5000)
+        // Fixed health per PRD (1000 HP)
+        this.maxHealth = 1000
         this.health = this.maxHealth
         this._displayedHealth = this.health
 
-        //console.log(`[CityHall] Spawned with ${this.health} HP`)
+        // Create building geometry
+        this._createBuildingGeometry()
+
+        // Create physics body (STATIC - blocks enemies)
+        this._createPhysicsBody()
 
         // Create health bar
         this._createHealthBar()
     }
 
+    /**
+     * Create a STATIC physics body for City Hall
+     * This prevents enemies from clipping through the building
+     */
+    _createPhysicsBody() {
+        const physicsManager = getPhysicsWorldManager()
+        if (!physicsManager || !physicsManager.world) {
+            console.warn('[CityHall] No physics world available')
+            return
+        }
+
+        // City Hall is 3x1x3 box at y=0.5 (center)
+        // Create a static box shape
+        const halfExtents = new CANNON.Vec3(1.5, 0.5, 1.5)  // Half of 3x1x3
+        const shape = new CANNON.Box(halfExtents)
+
+        // Create static body (mass = 0 means static)
+        this._physicsBody = new CANNON.Body({
+            mass: 0,  // Static body
+            type: CANNON.Body.STATIC,
+            shape: shape,
+            // Collision group: use a unique group for buildings
+            // Buildings should collide with enemies (group 1) but not friendlies
+            collisionFilterGroup: 1 << 4,  // Group 16: Buildings
+            collisionFilterMask: (1 << 0) | (1 << 1) | (1 << 2)  // Collide with enemies, player, friendlies
+        })
+
+        // Position at object's world position
+        const worldPos = new THREE.Vector3()
+        this.object.getWorldPosition(worldPos)
+        this._physicsBody.position.set(worldPos.x, worldPos.y, worldPos.z)
+
+        // Add to physics world
+        physicsManager.world.addBody(this._physicsBody)
+
+        console.log(`[CityHall] Created static physics body at (${worldPos.x}, ${worldPos.y}, ${worldPos.z})`)
+    }
+
+    _removePhysicsBody() {
+        if (this._physicsBody) {
+            const physicsManager = getPhysicsWorldManager()
+            if (physicsManager && physicsManager.world) {
+                physicsManager.world.removeBody(this._physicsBody)
+            }
+            this._physicsBody = null
+        }
+    }
+
+    /**
+     * Create the City Hall building geometry
+     * PRD: Large box (3×1×3) with #D8E2F0 material
+     */
+    _createBuildingGeometry() {
+        if (!this.object) return
+
+        // Check if there's already visible geometry
+        let hasGeometry = false
+        this.object.traverse((child) => {
+            if (child.isMesh && child.geometry) {
+                hasGeometry = true
+            }
+        })
+
+        if (hasGeometry) return  // Already has geometry
+
+        // Create main building box (3×1×3)
+        const geometry = new THREE.BoxGeometry(3, 1, 3)
+        const material = new THREE.MeshStandardMaterial({
+            color: 0xD8E2F0,  // PRD color: #D8E2F0
+            roughness: 0.5,
+            metalness: 0.1,
+            emissive: 0xD8E2F0,
+            emissiveIntensity: 0.05
+        })
+
+        this._buildingMesh = new THREE.Mesh(geometry, material)
+        this._buildingMesh.castShadow = true
+        this._buildingMesh.receiveShadow = true
+        this._buildingMesh.name = 'CityHallBuilding'
+
+        this.object.add(this._buildingMesh)
+
+        // Add a roof/detail on top
+        const roofGeometry = new THREE.BoxGeometry(2.5, 0.3, 2.5)
+        const roofMaterial = new THREE.MeshStandardMaterial({
+            color: 0xBBCCDD,
+            roughness: 0.6,
+            metalness: 0.2
+        })
+        const roofMesh = new THREE.Mesh(roofGeometry, roofMaterial)
+        roofMesh.position.y = 0.65
+        roofMesh.castShadow = true
+        roofMesh.name = 'CityHallRoof'
+        this.object.add(roofMesh)
+    }
+
     stop() {
         if (super.stop) super.stop()
         this._removeHealthBar()
+        this._removeBuildingGeometry()
+        this._removePhysicsBody()
+    }
+
+    _removeBuildingGeometry() {
+        if (!this.object) return
+
+        // Remove building mesh and roof
+        const toRemove = []
+        this.object.traverse((child) => {
+            if (child.name === 'CityHallBuilding' || child.name === 'CityHallRoof') {
+                toRemove.push(child)
+            }
+        })
+
+        for (const mesh of toRemove) {
+            mesh.geometry?.dispose()
+            mesh.material?.dispose()
+            this.object.remove(mesh)
+        }
+
+        this._buildingMesh = null
     }
 
     // ==================== HEALTH BAR ====================
